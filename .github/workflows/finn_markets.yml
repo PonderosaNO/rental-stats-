@@ -1,11 +1,13 @@
 name: Market stats weekly
 
 on:
-  workflow_dispatch:        # enable the "Run workflow" button
+  workflow_dispatch:        # gir deg "Run workflow"-knappen
   push:
-    branches: [ main ]
+    branches: 
+      - main
+      - test                # legg til test her
   schedule:
-    - cron: "0 6 * * 1"     # Mondays 06:00 UTC
+    - cron: "0 6 * * 1"     # ukentlig mandag 06:00 UTC
 
 jobs:
   run:
