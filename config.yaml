@@ -1,0 +1,22 @@
+global:
+  user_agent: "MarketStatsBot/1.0 (+contact: you@example.com)"
+  max_pages: 40
+  page_sleep_sec: 1.6
+  ad_sleep_sec: 0.9
+
+markets:
+  - key: narvik_no
+    country: NO
+    city: "Narvik"
+    currency: "NOK"
+    source: "FINN"
+    search_url: "https://www.finn.no/realestate/lettings/search.html?filters=&lat=68.437705&lon=17.424586&radius=3000"
+
+  - key: tromso_no
+    country: NO
+    city: "Tromsø"
+    currency: "NOK"
+    source: "FINN"
+    search_url: "https://www.finn.no/realestate/lettings/search.html?lat=69.6492&lon=18.9553&radius=6000"
+
+  # legg til flere markeder her uten å endre kode
