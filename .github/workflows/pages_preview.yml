@@ -1,0 +1,49 @@
+name: Pages preview (test)
+
+on:
+  push:
+    branches: [ test ]        # kjør når du pusher til test
+  workflow_dispatch:          # og la oss kunne trigge manuelt
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages-preview-test"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # (valgfritt) bygg/generer, men du har allerede statiske filer i docs/
+      - name: Ensure .nojekyll
+        run: |
+          mkdir -p docs
+          [ -f docs/.nojekyll ] || touch docs/.nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact (docs)
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages (preview)
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          preview: true   # 👈 lager en egen forhåndsvisnings-URL
