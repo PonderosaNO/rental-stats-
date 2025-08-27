@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="utf-8" />
+  <title>Rental Stats – Preview</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --bg:#f7f7f8; --card:#fff; --ink:#111; --muted:#666;
+      --line:#e9e9ec; --brand:#0a58ca; --ok:#198754; --shadow:0 1px 2px rgba(0,0,0,.04);
+    }
+    *{box-sizing:border-box}
+    body{margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color:var(--ink); background:var(--bg)}
+    header.topbar{position:sticky; top:0; z-index:10; background:var(--card); border-bottom:1px solid var(--line); box-shadow:var(--shadow)}
+    .topbar .wrap{max-width:1200px; margin:0 auto; display:flex; align-items:center; gap:16px; padding:10px 16px}
+    .brand{display:flex; align-items:center; gap:10px; font-weight:700}
+    .brand-badge{width:28px; height:28px; border-radius:6px; background:var(--brand); display:grid; place-items:center; color:#fff; font-weight:800}
+    .sub{color:var(--muted); font-size:12px}
+    main{max-width:1200px; margin:18px auto; padding:0 16px}
+
+    .controls{display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:12px 0 4px}
+    select, input[type="text"]{padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff; min-width:220px}
+    .pill{background:#f3f4f6; padding:6px 10px; border-radius:999px; font-size:12px; color:#333}
+
+    .kpis{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:14px 0}
+    .kpi{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; box-shadow:var(--shadow)}
+    .kpi h3{margin:0 0 8px 0; font-size:12px; color:var(--muted); font-weight:600; text-transform:uppercase; letter-spacing:.04em}
+    .kpi .val{font-size:26px; font-weight:800}
+    .kpi .hint{font-size:12px; color:var(--muted); margin-top:6px}
+    @media (max-width:900px){ .kpis{grid-template-columns:1fr 1fr} }
+    @media (max-width:560px){ .kpis{grid-template-columns:1fr} }
+
+    .row{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+    @media (max-width:1000px){ .row{grid-template-columns:1fr} }
+
+    .card{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; box-shadow:var(--shadow)}
+    h2{margin:0 0 10px 0; font-size:16px}
+    .small{font-size:12px; color:var(--muted)}
+
+    table{width:100%; border-collapse:collapse}
+    th, td{padding:10px 12px; border-top:1px solid var(--line)}
+    th{background:#fbfbfc; position:sticky; top:0; z-index:1; text-align:left}
+    td.right, th.right{text-align:right}
+    .scroll{max-height:420px; overflow:auto}
+    a{color:var(--brand); text-decoration:none}
+    a:hover{text-decoration:underline}
+
+    canvas{max-width:100%; height:320px}
+    footer{max-width:1200px; margin:24px auto; padding:0 16px 24px; color:var(--muted); font-size:12px}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap">
+      <div class="brand">
+        <div class="brand-badge">R</div>
+        <div>
+          <div>Rental Stats</div>
+          <div class="sub">Live forhåndsvisning</div>
+        </div>
+      </div>
+      <div style="margin-left:auto" class="sub">Snapshot: <span id="hdrSnapshot">…</span></div>
+    </div>
+  </header>
+
+  <main>
+    <!-- Kontroller -->
+    <div class="controls">
+      <label>Velg marked
+        <select id="marketSelect"></select>
+      </label>
+      <label>Søk i liste
+        <input id="searchInput" type="text" placeholder="Søk tittel, adresse eller postnr">
+      </label>
+      <span id="snapshotBadge" class="pill"></span>
+    </div>
+
+    <!-- KPI-kort -->
+    <section class="kpis">
+      <div class="kpi">
+        <h3>Antall annonser</h3>
+        <div id="kpiListings" class="val">–</div>
+        <div class="hint">Akkurat nå i valgt marked</div>
+      </div>
+      <div class="kpi">
+        <h3>Snittpris (mnd)</h3>
+        <div id="kpiAvgPrice" class="val">–</div>
+        <div class="hint">Basert på alle aktive annonser</div>
+      </div>
+      <div class="kpi">
+        <h3>Snitt kvm</h3>
+        <div id="kpiAvgSqm" class="val">–</div>
+        <div class="hint">Gjennomsnittlig areal</div>
+      </div>
+    </section>
+
+    <!-- Grafer -->
+    <section class="row">
+      <div class="card">
+        <h2>Snittpris per marked</h2>
+        <canvas id="marketChart" aria-label="Snittpris per marked"></canvas>
+      </div>
+      <div class="card">
+        <h2>Snitt per antall soverom</h2>
+        <canvas id="bedsChart" aria-label="Snittpris per soverom"></canvas>
+      </div>
+    </section>
+
+    <!-- Tabeller -->
+    <section class="card" style="margin-top:16px">
+      <h2>Oversikt</h2>
+      <table id="summaryTable">
+        <thead>
+          <tr>
+            <th>Marked</th>
+            <th>Dato</th>
+            <th class="right">Antall</th>
+            <th class="right">Snitt pris</th>
+            <th class="right">Snitt kvm</th>
+            <th class="right">Snitt pris per kvm</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="card" style="margin-top:16px">
+      <h2>Detaljer for valgt marked</h2>
+      <div class="small" id="detailSub"></div>
+      <div class="scroll">
+        <table id="detailTable">
+          <thead>
+            <tr>
+              <th>Tittel</th>
+              <th>Adresse</th>
+              <th>Postnr</th>
+              <th>By</th>
+              <th class="right">Kvm</th>
+              <th class="right">Soverom</th>
+              <th class="right">Pris NOK</th>
+              <th class="right">Pris per kvm</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>© 2025 Rental Stats · Forhåndsvisning</footer>
+
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    // ---------- Kildebaner ----------
+    const base = (location.origin + location.pathname).replace(/\/index_preview\.html$/, '').replace(/\/$/, '');
+    const SUMMARY_PATH = base + '/data/summaries/markets_summary.csv';
+    const BEDS_PATH    = base + '/data/summaries/markets_by_bedrooms.csv';
+
+    // ---------- Utils ----------
+    function nf(v){ if(v===undefined||v===null||v===''||isNaN(+v))return '–'; return (+v).toLocaleString('no-NO',{maximumFractionDigits:0}); }
+    async function fetchCSV(url){
+      const res = await fetch(url + '?cache=' + Date.now());
+      if(!res.ok) throw new Error('HTTP ' + res.status);
+      const text = await res.text();
+      const lines = text.trim().split(/\r?\n/);
+      const headers = lines.shift().split(',').map(h=>h.trim());
+      const data = lines.map(line=>{
+        const cells = line.split(',').map(s=>s.trim());
+        const obj={}; headers.forEach((h,i)=>obj[h]=cells[i] ?? ''); return obj;
+      });
+      return {headers, data};
+    }
+
+    // ---------- Renderers ----------
+    function renderSummaryTable(rows){
+      const tb=document.querySelector('#summaryTable tbody'); tb.innerHTML='';
+      rows.forEach(r=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML = `
+          <td>${r.market_key}</td>
+          <td>${r.snapshot_date}</td>
+          <td class="right">${nf(r.listings)}</td>
+          <td class="right">${nf(r.avg_price)}</td>
+          <td class="right">${nf(r.avg_sqm)}</td>
+          <td class="right">${nf(r.avg_price_per_sqm)}</td>
+        `;
+        tb.appendChild(tr);
+      });
+    }
+    function renderDetailTable(rows){
+      const tb=document.querySelector('#detailTable tbody'); tb.innerHTML='';
+      rows.forEach(r=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML = `
+          <td><a href="${r.url}" target="_blank" rel="noopener">${r.title||'Bildegalleri'}</a></td>
+          <td>${r.address||''}</td>
+          <td>${r.postal_code||''}</td>
+          <td>${r.city||''}</td>
+          <td class="right">${nf(r.sqm)}</td>
+          <td class="right">${nf(r.bedrooms)}</td>
+          <td class="right">${nf(r.price_nok)}</td>
+          <td class="right">${nf(r.price_per_sqm)}</td>
+        `;
+        tb.appendChild(tr);
+      });
+    }
+    function renderKpis(row){
+      document.getElementById('kpiListings').textContent = nf(row?.listings);
+      document.getElementById('kpiAvgPrice').textContent = nf(row?.avg_price);
+      document.getElementById('kpiAvgSqm').textContent   = nf(row?.avg_sqm);
+      document.getElementById('hdrSnapshot').textContent = row?.snapshot_date || '–';
+    }
+
+    // ---------- Charts ----------
+    let marketChart, bedsChart;
+    function drawMarketChart(rows){
+      const ctx=document.getElementById('marketChart').getContext('2d');
+      if(marketChart) marketChart.destroy();
+      marketChart = new Chart(ctx,{
+        type:'bar',
+        data:{ labels: rows.map(r=>r.market_key),
+          datasets:[{ label:'Snittpris per marked (NOK)', data: rows.map(r=>+r.avg_price||0), backgroundColor:'#0a58ca' }]},
+        options:{ responsive:true, plugins:{legend:{display:false}} }
+      });
+    }
+    function drawBedsChart(rows){
+      const ctx=document.getElementById('bedsChart').getContext('2d');
+      if(bedsChart) bedsChart.destroy();
+      bedsChart = new Chart(ctx,{
+        type:'bar',
+        data:{ labels: rows.map(r=>`${r.bedrooms} soverom`),
+          datasets:[{ label:'Snittpris (NOK)', data: rows.map(r=>+r.avg_price||0), backgroundColor:'#198754' }]},
+        options:{ responsive:true, plugins:{legend:{display:false}} }
+      });
+    }
+
+    // ---------- State ----------
+    let allSummary=[], currentMarket=null, currentSnapshotFile=null, currentRows=[];
+
+    // ---------- Loaders ----------
+    async function loadBedsSummary(marketKey){
+      try{
+        const {data}=await fetchCSV(BEDS_PATH);
+        const rows=data.filter(r=>r.market_key===marketKey).sort((a,b)=>(+a.bedrooms||0)-(+b.bedrooms||0));
+        drawBedsChart(rows);
+      }catch(e){ console.warn('Beds summary mangler:', e); drawBedsChart([]); }
+    }
+    async function loadMarketDetail(){
+      if(!currentSnapshotFile){ renderDetailTable([]); return; }
+      const path = base + '/data/snapshots/' + currentSnapshotFile;
+      const { data } = await fetchCSV(path);
+      const rows = data.filter(r => r.market_key === currentMarket);
+      currentRows = rows;
+      renderDetailTable(rows);
+      document.getElementById('detailSub').textContent = `Viser ${rows.length} annonser for ${currentMarket}.`;
+    }
+
+    // ---------- Init ----------
+    async function init(){
+      try{
+        const {data} = await fetchCSV(SUMMARY_PATH);
+        allSummary = data;
+        renderSummaryTable(allSummary);
+        drawMarketChart(allSummary);
+
+        const sel=document.getElementById('marketSelect');
+        sel.innerHTML=''; data.forEach(r=>{
+          const opt=document.createElement('option');
+          opt.value=r.market_key; opt.textContent=r.market_key; sel.appendChild(opt);
+        });
+
+        currentMarket = data[0]?.market_key || null;
+        currentSnapshotFile = data[0]?.snapshot_file || null;
+        sel.value=currentMarket;
+        document.getElementById('snapshotBadge').textContent = currentSnapshotFile || '';
+        renderKpis(data[0]);
+
+        await loadMarketDetail();
+        await loadBedsSummary(currentMarket);
+
+        sel.addEventListener('change', async e=>{
+          currentMarket = e.target.value;
+          const row=allSummary.find(x=>x.market_key===currentMarket);
+          currentSnapshotFile = row?.snapshot_file || null;
+          document.getElementById('snapshotBadge').textContent = currentSnapshotFile || '';
+          renderKpis(row);
+          await loadMarketDetail();
+          await loadBedsSummary(currentMarket);
+          document.getElementById('searchInput').value='';
+        });
+
+        document.getElementById('searchInput').addEventListener('input', e=>{
+          const q=e.target.value.trim().toLowerCase();
+          if(!q) return renderDetailTable(currentRows);
+          const filtered=currentRows.filter(r =>
+            (r.title||'').toLowerCase().includes(q) ||
+            (r.address||'').toLowerCase().includes(q) ||
+            (r.postal_code||'').toLowerCase().includes(q)
+          );
+          renderDetailTable(filtered);
+        });
+
+      }catch(e){
+        console.error('Klarte ikke å laste summary:', e);
+        document.getElementById('snapshotBadge').textContent = 'Ingen data';
+      }
+    }
+    init();
+  </script>
+</body>
+</html>
