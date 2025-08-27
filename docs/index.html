@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="utf-8">
+  <title>Utleiestatistikk Dashboard</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+    body { margin: 20px; }
+    h1 { margin: 0 0 8px 0; }
+    .muted { color: #666; font-size: 14px; margin-bottom: 20px; }
+    .row { display: flex; gap: 20px; flex-wrap: wrap; }
+    .card { border: 1px solid #e5e5e5; border-radius: 8px; padding: 14px; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+    .card h2 { margin: 0 0 8px 0; font-size: 18px; }
+    label { display: block; font-weight: 600; margin-bottom: 6px; }
+    select, input { padding: 8px; border: 1px solid #ccc; border-radius: 6px; width: 100%; max-width: 320px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; vertical-align: top; }
+    th { background: #fafafa; position: sticky; top: 0; }
+    .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eef3ff; color: #2e5cff; font-size: 12px; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 6px; background: #f6f6f6; font-size: 12px; }
+    .toolbar { display: flex; gap: 10px; align-items: center; margin: 8px 0 0 0; flex-wrap: wrap; }
+    .spacer { flex: 1; }
+    .small { font-size: 12px; color: #777; }
+    .right { text-align: right; }
+  </style>
+</head>
+<body>
+  <h1>Utleiestatistikk</h1>
+  <div class="muted">Data oppdateres ukentlig av GitHub Actions fra <code>data</code> mappen i repoet.</div>
+
+  <div class="row">
+    <div class="card" style="flex:1; min-width: 320px;">
+      <h2>Markeder</h2>
+      <div id="marketsInfo" class="small">Laster...</div>
+      <div class="toolbar">
+        <div>
+          <label for="marketSelect">Velg marked</label>
+          <select id="marketSelect"></select>
+        </div>
+        <div>
+          <label for="searchInput">Søk i liste</label>
+          <input id="searchInput" placeholder="Søk tittel, adresse eller postnummer">
+        </div>
+        <div class="spacer"></div>
+        <div id="snapshotBadge" class="pill">Ingen fil</div>
+      </div>
+      <div id="marketsTableWrap"></div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top: 20px;">
+    <div class="card" style="flex:1 1 100%;">
+      <h2>Detaljer for valgt marked</h2>
+      <div id="detailMeta" class="small">Velg et marked ovenfor.</div>
+      <div id="detailTableWrap"></div>
+    </div>
+  </div>
+
+<script>
+  // Enkel CSV parser med støtte for enkle sitatfelt
+  function parseCSV(text) {
+    const rows = [];
+    let i = 0, field = '', row = [], inQuotes = false;
+    while (i < text.length) {
+      const c = text[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (text[i+1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += c;
+      } else {
+        if (c === '"') inQuotes = true;
+        else if (c === ',') { row.push(field); field = ''; }
+        else if (c === '\n') { row.push(field); rows.push(row); field = ''; row = []; }
+        else if (c === '\r') { /* skip */ }
+        else field += c;
+      }
+      i++;
+    }
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    if (!rows.length) return { headers: [], data: [] };
+    const headers = rows[0];
+    const data = rows.slice(1).filter(r => r.length && r.some(x => x && x.trim() !== '')).map(r => {
+      const obj = {}; headers.forEach((h, idx) => obj[h] = r[idx] ?? ''); return obj;
+    });
+    return { headers, data };
+  }
+
+  async function fetchCSV(path) {
+    const res = await fetch(path + '?cache=' + Date.now());
+    if (!res.ok) throw new Error('Kunne ikke hente ' + path);
+    const text = await res.text();
+    return parseCSV(text);
+  }
+
+  function htmlEscape(s) { return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+  function numberFormat(n) { if (n === '' || n === undefined || n === null) return ''; const x = Number(n); if (Number.isNaN(x)) return n; return x.toLocaleString('no-NO'); }
+
+  function renderTable(container, rows, columns) {
+    if (!rows.length) { container.innerHTML = '<div class="small">Ingen data</div>'; return; }
+    const thead = '<thead><tr>' + columns.map(c => `<th>${htmlEscape(c.label)}</th>`).join('') + '</tr></thead>';
+    const tbody = '<tbody>' + rows.map(r => {
+      return '<tr>' + columns.map(c => {
+        const raw = r[c.key] ?? '';
+        const v = c.format ? c.format(raw, r) : htmlEscape(raw);
+        return `<td${c.right ? ' class="right"' : ''}>${v}</td>`;
+      }).join('') + '</tr>';
+    }).join('') + '</tbody>';
+    container.innerHTML = `<div style="overflow:auto; max-height: 70vh;"><table>${thead}${tbody}</table></div>`;
+  }
+
+  // Global state
+  let marketsSummary = [];
+  let currentMarket = null;
+  let currentSnapshotFile = null;
+  let currentSnapshotRows = [];
+
+  async function loadMarketsSummary() {
+    const path = 'data/summaries/markets_summary.csv';
+    const { data } = await fetchCSV(path);
+    marketsSummary = data;
+    // Info
+    const infoEl = document.getElementById('marketsInfo');
+    infoEl.textContent = `Antall markeder: ${data.length}`;
+    // Drop down
+    const sel = document.getElementById('marketSelect');
+    sel.innerHTML = data.map(r => `<option value="${htmlEscape(r.market_key)}">${htmlEscape(r.market_key)} (${htmlEscape(r.city || r.market_key)})</option>`).join('');
+    // Tabell
+    renderTable(document.getElementById('marketsTableWrap'), data, [
+      { key: 'market_key', label: 'Marked' },
+      { key: 'snapshot_date', label: 'Dato' },
+      { key: 'listings', label: 'Antall', right: true, format: v => numberFormat(v) },
+      { key: 'avg_price', label: 'Snitt pris', right: true, format: v => numberFormat(v) },
+      { key: 'avg_sqm', label: 'Snitt kvm', right: true, format: v => numberFormat(v) },
+      { key: 'avg_price_per_sqm', label: 'Snitt pris per kvm', right: true, format: v => numberFormat(v) }
+    ]);
+    // Velg første som standard
+    if (data.length) {
+      currentMarket = data[0].market_key;
+      currentSnapshotFile = data[0].snapshot_file;
+      sel.value = currentMarket;
+      updateSnapshotBadge();
+      await loadMarketDetail();
+    }
+    sel.addEventListener('change', async () => {
+      const mk = sel.value;
+      const row = marketsSummary.find(r => r.market_key === mk);
+      currentMarket = mk;
+      currentSnapshotFile = row ? row.snapshot_file : null;
+      updateSnapshotBadge();
+      await loadMarketDetail();
+    });
+  }
+
+  function updateSnapshotBadge() {
+    const badge = document.getElementById('snapshotBadge');
+    if (!currentSnapshotFile) { badge.textContent = 'Ingen fil'; return; }
+    badge.textContent = currentSnapshotFile;
+  }
+
+  async function loadMarketDetail() {
+    const meta = document.getElementById('detailMeta');
+    const wrap = document.getElementById('detailTableWrap');
+    wrap.innerHTML = '';
+    if (!currentSnapshotFile || !currentMarket) { meta.textContent = 'Velg et marked.'; return; }
+    const path = 'data/snapshots/' + currentSnapshotFile;
+    try {
+      const { data } = await fetchCSV(path);
+      currentSnapshotRows = data;
+      meta.textContent = `Viser ${data.length} annonser for ${currentMarket}.`;
+      const searchInput = document.getElementById('searchInput');
+      function applyFilter() {
+        const q = (searchInput.value || '').toLowerCase();
+        const filtered = !q ? data : data.filter(r => {
+          return (r.title||'').toLowerCase().includes(q)
+              || (r.address||'').toLowerCase().includes(q)
+              || (r.postal_code||'').toLowerCase().includes(q)
+              || (r.city||'').toLowerCase().includes(q)
+              || (r.bedrooms||'').toLowerCase().includes(q);
+        });
+        renderTable(wrap, filtered, [
+          { key: 'title', label: 'Tittel', format: (v, r) => `<a href="${htmlEscape(r.url)}" target="_blank" rel="noopener">${htmlEscape(v || r.url)}</a>` },
+          { key: 'address', label: 'Adresse' },
+          { key: 'postal_code', label: 'Postnr' },
+          { key: 'city', label: 'By' },
+          { key: 'sqm', label: 'Kvm', right: true, format: v => numberFormat(v) },
+          { key: 'bedrooms', label: 'Soverom', right: true, format: v => numberFormat(v) },
+          { key: 'price_nok', label: 'Pris NOK', right: true, format: v => numberFormat(v) },
+          { key: 'price_per_sqm', label: 'Pris per kvm', right: true, format: v => numberFormat(v) }
+        ]);
+      }
+      searchInput.oninput = applyFilter;
+      applyFilter();
+    } catch (e) {
+      meta.textContent = 'Klarte ikke å laste detaljfil: ' + e.message;
+      console.error(e);
+    }
+  }
+
+  // start
+  loadMarketsSummary().catch(err => {
+    document.getElementById('marketsInfo').textContent = 'Feil ved lasting: ' + err.message;
+    console.error(err);
+  });
+</script>
+</body>
+</html>
