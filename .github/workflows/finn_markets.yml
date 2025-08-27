@@ -1,12 +1,11 @@
 name: Market stats weekly
 
 on:
- workflow_dispatch:   # 👈 enables the green "Run workflow" button
-  push:                # runs when you push code
-    branches:
-      - main
-  schedule:            # runs on a cron schedule
-    - cron: "0 6 * * 1"   # every Monday 06:00 UTC
+  workflow_dispatch:        # enable the "Run workflow" button
+  push:
+    branches: [ main ]
+  schedule:
+    - cron: "0 6 * * 1"     # Mondays 06:00 UTC
 
 jobs:
   run:
@@ -14,19 +13,28 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
       - name: Fetch all markets
         run: python scripts/fetch.py
+
       - name: Enrich per address
         run: python scripts/enrich.py
+
       - name: Summaries
         run: python scripts/summarize.py
+
       - name: Commit data
         run: |
           git config user.name "github-actions"
@@ -34,10 +42,12 @@ jobs:
           git add data/
           git commit -m "Weekly market scrape" || echo "No changes"
           git push
-    - name: Copy data into docs for GitHub Pages
-      run: |
-        mkdir -p docs/data
-        rsync -a --delete data/ docs/data/
-        git add docs/data/
-        git commit -m "Update docs/data for Pages" || echo "No changes in docs"
-        git push
+
+      # Keep this block only if Pages source is /docs
+      - name: Copy data into docs for GitHub Pages
+        run: |
+          mkdir -p docs/data
+          rsync -a --delete data/ docs/data/
+          git add docs/data/
+          git commit -m "Update docs/data for Pages" || echo "No changes in docs"
+          git push
