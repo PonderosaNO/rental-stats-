@@ -29,9 +29,9 @@ def summarize_market(market_key):
         "snapshot_file": latest.name,
         "snapshot_date": latest.stem.split("_")[-1],
         "listings": len(rows),
-        "avg_price": round(statistics.mean([p for p in prices if p is not None]),2) if prices else "",
-        "avg_sqm": round(statistics.mean([s for s in sqms if s is not None]),2) if sqms else "",
-        "avg_price_per_sqm": round(statistics.mean([v for v in ppk if v is not None]),2) if ppk else "",
+"avg_price": round(statistics.mean([p for p in prices if p is not None])) if prices else "",
+"avg_sqm": round(statistics.mean([s for s in sqms if s is not None])) if sqms else "",
+"avg_price_per_sqm": round(statistics.mean([v for v in ppk if v is not None])) if ppk else "",
     }
 
     # per antall soverom
@@ -51,9 +51,9 @@ def summarize_market(market_key):
             "snapshot_date": out["snapshot_date"],
             "bedrooms": b,
             "listings": len(lst),
-            "avg_price": round(statistics.mean([p for p in b_prices if p is not None]),2) if b_prices else "",
-            "avg_sqm": round(statistics.mean([s for s in b_sqms if s is not None]),2) if b_sqms else "",
-            "avg_price_per_sqm": round(statistics.mean([v for v in b_ppk if v is not None]),2) if b_ppk else "",
+            "avg_price": round(statistics.mean([p for p in b_prices if p is not None])) if b_prices else "",
+            "avg_sqm": round(statistics.mean([s for s in b_sqms if s is not None])) if b_sqms else "",
+            "avg_price_per_sqm": round(statistics.mean([v for v in b_ppk if v is not None])) if b_ppk else "",
         })
 
     return out, bed_rows
