@@ -5,7 +5,7 @@ on:
   push:
     branches: [ main ]      # kjør ved push til main
   schedule:
-    - cron: "0 6 * * 1"     # mandager 06:00 UTC
+    - cron: "0 5 * * *"     # mandager 06:00 UTC
 
 jobs:
   run:
