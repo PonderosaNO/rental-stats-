@@ -31,3 +31,10 @@ jobs:
           git add data/
           git commit -m "Weekly market scrape" || echo "No changes"
           git push
+    - name: Copy data into docs for GitHub Pages
+      run: |
+        mkdir -p docs/data
+        rsync -a --delete data/ docs/data/
+        git add docs/data/
+        git commit -m "Update docs/data for Pages" || echo "No changes in docs"
+        git push
