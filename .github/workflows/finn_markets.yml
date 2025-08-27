@@ -1,19 +1,17 @@
 name: Market stats weekly
 
 on:
-  workflow_dispatch:        # gir deg "Run workflow"-knappen
+  workflow_dispatch:        # gir "Run workflow"-knapp
   push:
-    branches: 
-      - main
-      - test                # legg til test her
+    branches: [ main ]      # kjør ved push til main
   schedule:
-    - cron: "0 6 * * 1"     # ukentlig mandag 06:00 UTC
+    - cron: "0 6 * * 1"     # mandager 06:00 UTC
 
 jobs:
   run:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write       # nødvendig for git commit/push
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,7 +35,7 @@ jobs:
       - name: Summaries
         run: python scripts/summarize.py
 
-      - name: Commit data
+      - name: Commit data (data/)
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
@@ -45,7 +43,6 @@ jobs:
           git commit -m "Weekly market scrape" || echo "No changes"
           git push
 
-      # Keep this block only if Pages source is /docs
       - name: Copy data into docs for GitHub Pages
         run: |
           mkdir -p docs/data
