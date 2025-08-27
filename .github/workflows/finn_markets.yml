@@ -1,9 +1,12 @@
 name: Market stats weekly
 
 on:
-  workflow_dispatch:
-  schedule:
-    - cron: "0 6 * * 1"   # Mandag 06:00 UTC
+ workflow_dispatch:   # 👈 enables the green "Run workflow" button
+  push:                # runs when you push code
+    branches:
+      - main
+  schedule:            # runs on a cron schedule
+    - cron: "0 6 * * 1"   # every Monday 06:00 UTC
 
 jobs:
   run:
