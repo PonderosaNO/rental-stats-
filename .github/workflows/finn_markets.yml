@@ -1,0 +1,33 @@
+name: Market stats weekly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"   # Mandag 06:00 UTC
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Fetch all markets
+        run: python scripts/fetch.py
+      - name: Enrich per address
+        run: python scripts/enrich.py
+      - name: Summaries
+        run: python scripts/summarize.py
+      - name: Commit data
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add data/
+          git commit -m "Weekly market scrape" || echo "No changes"
+          git push
