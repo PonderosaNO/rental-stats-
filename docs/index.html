@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <style>
     :root { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-    body { margin: 20px; }
+    body { margin: 20px; background:#f9f9f9; }
     h1 { margin: 0 0 12px 0; }
     .muted { color:#666; font-size:14px; margin-bottom:16px; }
     .row { display:flex; gap:20px; flex-wrap:wrap; }
@@ -15,13 +15,14 @@
     th, td { padding:10px 12px; border-top:1px solid #eee; }
     th { text-align:left; background:#fafafa; position:sticky; top:0; z-index:1; }
     td.right, th.right { text-align:right; }
-    .controls { display:flex; gap:14px; align-items:center; margin-bottom:10px; }
-    select, input[type="text"] { padding:8px 10px; border:1px solid #ddd; border-radius:8px; min-width:260px; }
+    .controls { display:flex; gap:14px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
+    select, input[type="text"] { padding:8px 10px; border:1px solid #ddd; border-radius:8px; min-width:220px; }
     .pill { background:#f4f4f4; padding:6px 10px; border-radius:999px; font-size:12px; }
     .small { font-size:12px; color:#666; }
     a { color:#0a58ca; text-decoration:none; }
     a:hover { text-decoration:underline; }
     .scroll { max-height:420px; overflow:auto; }
+    canvas { max-width:100%; height:300px; }
   </style>
 </head>
 <body>
@@ -39,6 +40,7 @@
   </div>
 
   <div class="card">
+    <h2>Oversikt</h2>
     <table id="summaryTable">
       <thead>
         <tr>
@@ -82,17 +84,33 @@
     <div class="card">
       <h2>Snitt per antall soverom</h2>
       <div id="bedsTableWrap"></div>
+      <canvas id="bedsChart"></canvas>
     </div>
   </div>
 
+  <div class="row" style="margin-top:20px;">
+    <div class="card">
+      <h2>Snittpris per marked</h2>
+      <canvas id="marketChart"></canvas>
+    </div>
+  </div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
 const base = (location.origin + location.pathname).replace(/\/$/, '');
 const SUMMARY_PATH = base + '/data/summaries/markets_summary.csv';
 const BEDS_PATH    = base + '/data/summaries/markets_by_bedrooms.csv';
 
+let allSummary = [];
+let currentMarket = null;
+let currentSnapshotFile = null;
+let currentRows = [];
+
+let marketChart, bedsChart;
+
 function numberFormat(v) {
-  if (v === undefined || v === null || v === '' || isNaN(+v)) return '';
-  return (+v).toLocaleString('no-NO', { maximumFractionDigits: 2 });
+  if (!v || isNaN(+v)) return '';
+  return (+v).toLocaleString('no-NO', { maximumFractionDigits: 0 });
 }
 
 async function fetchCSV(url) {
@@ -102,7 +120,6 @@ async function fetchCSV(url) {
   const lines = text.trim().split(/\r?\n/);
   const headers = lines.shift().split(',').map(h => h.trim());
   const data = lines.map(line => {
-    // enkel CSV (ingen komma i felt her)
     const cells = line.split(',').map(s => s.trim());
     const row = {};
     headers.forEach((h,i)=> row[h] = cells[i] ?? '');
@@ -134,9 +151,8 @@ function renderDetailTable(rows) {
   tb.innerHTML = '';
   rows.forEach(r => {
     const tr = document.createElement('tr');
-    const title = r.title && r.title.toLowerCase() !== 'bildegalleri' ? r.title : 'Bildegalleri';
     tr.innerHTML = `
-      <td><a href="${r.url}" target="_blank" rel="noopener">${title}</a></td>
+      <td><a href="${r.url}" target="_blank">${r.title || 'Bildegalleri'}</a></td>
       <td>${r.address || ''}</td>
       <td>${r.postal_code || ''}</td>
       <td>${r.city || ''}</td>
@@ -149,82 +165,98 @@ function renderDetailTable(rows) {
   });
 }
 
-function renderTable(container, rows, columns) {
-  container.innerHTML = '';
+// ----------- Grafer ---------------
+function drawMarketChart(rows) {
+  const ctx = document.getElementById('marketChart').getContext('2d');
+  if (marketChart) marketChart.destroy();
+  marketChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: rows.map(r=>r.market_key),
+      datasets: [{
+        label: 'Snittpris per marked (NOK)',
+        data: rows.map(r=>+r.avg_price||0),
+        backgroundColor: '#0a58ca'
+      }]
+    },
+    options: { responsive:true, plugins:{ legend:{display:false} } }
+  });
+}
+
+function drawBedsChart(rows) {
+  const ctx = document.getElementById('bedsChart').getContext('2d');
+  if (bedsChart) bedsChart.destroy();
+  bedsChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: rows.map(r=>`${r.bedrooms} soverom`),
+      datasets: [{
+        label: 'Snittpris (NOK)',
+        data: rows.map(r=>+r.avg_price||0),
+        backgroundColor: '#198754'
+      }]
+    },
+    options: { responsive:true, plugins:{ legend:{display:false} } }
+  });
+}
+
+// ----------- Per soverom-tabell ---------------
+function renderBedsTable(rows) {
+  const wrap = document.getElementById('bedsTableWrap');
+  wrap.innerHTML = '';
   const tbl = document.createElement('table');
-  const thead = document.createElement('thead');
-  const htr = document.createElement('tr');
-  columns.forEach(c => {
-    const th = document.createElement('th');
-    th.textContent = c.label;
-    if (c.right) th.classList.add('right');
-    htr.appendChild(th);
-  });
-  thead.appendChild(htr);
-  const tbody = document.createElement('tbody');
-  rows.forEach(r => {
+  tbl.innerHTML = `
+    <thead><tr>
+      <th class="right">Soverom</th>
+      <th class="right">Antall</th>
+      <th class="right">Snitt pris</th>
+      <th class="right">Snitt kvm</th>
+      <th class="right">Snitt pris/kvm</th>
+    </tr></thead>
+    <tbody></tbody>`;
+  const tb = tbl.querySelector('tbody');
+  rows.forEach(r=>{
     const tr = document.createElement('tr');
-    columns.forEach(c => {
-      const td = document.createElement('td');
-      let v = r[c.key];
-      td.innerHTML = (c.format ? c.format(v) : (v ?? ''));
-      if (c.right) td.classList.add('right');
-      tbody.appendChild(tr);
-    });
-    tr.appendChild(td);
+    tr.innerHTML = `
+      <td class="right">${numberFormat(r.bedrooms)}</td>
+      <td class="right">${numberFormat(r.listings)}</td>
+      <td class="right">${numberFormat(r.avg_price)}</td>
+      <td class="right">${numberFormat(r.avg_sqm)}</td>
+      <td class="right">${numberFormat(r.avg_price_per_sqm)}</td>
+    `;
+    tb.appendChild(tr);
   });
-  tbl.appendChild(thead); tbl.appendChild(tbody);
-  container.appendChild(tbl);
+  wrap.appendChild(tbl);
 }
 
+// ----------- Loaders ---------------
 async function loadBedsSummary(marketKey) {
-  try {
-    const { data } = await fetchCSV(BEDS_PATH);
-    const rows = data.filter(r => r.market_key === marketKey);
-    // sorter på antall soverom
-    rows.sort((a,b)=> (+a.bedrooms||0) - (+b.bedrooms||0));
-    const wrap = document.getElementById('bedsTableWrap');
-    wrap.innerHTML = '';
-    const tbl = document.createElement('table');
-    tbl.innerHTML = `
-      <thead><tr>
-        <th class="right">Soverom</th>
-        <th class="right">Antall</th>
-        <th class="right">Snitt pris</th>
-        <th class="right">Snitt kvm</th>
-        <th class="right">Snitt pris/kvm</th>
-      </tr></thead>
-      <tbody></tbody>`;
-    const tb = tbl.querySelector('tbody');
-    rows.forEach(r=>{
-      const tr = document.createElement('tr');
-      tr.innerHTML = `
-        <td class="right">${numberFormat(r.bedrooms)}</td>
-        <td class="right">${numberFormat(r.listings)}</td>
-        <td class="right">${numberFormat(r.avg_price)}</td>
-        <td class="right">${numberFormat(r.avg_sqm)}</td>
-        <td class="right">${numberFormat(r.avg_price_per_sqm)}</td>
-      `;
-      tb.appendChild(tr);
-    });
-    wrap.appendChild(tbl);
-  } catch(e) {
-    document.getElementById('bedsTableWrap').innerHTML = '<div class="small">Ingen data tilgjengelig.</div>';
-    console.error(e);
-  }
+  const { data } = await fetchCSV(BEDS_PATH);
+  const rows = data.filter(r => r.market_key === marketKey);
+  rows.sort((a,b)=> (+a.bedrooms||0) - (+b.bedrooms||0));
+  renderBedsTable(rows);
+  drawBedsChart(rows);
 }
 
-let allSummary = [];
-let currentMarket = null;
-let currentSnapshotFile = null;
-let currentRows = [];
+async function loadMarketDetail() {
+  if (!currentSnapshotFile) {
+    document.querySelector('#detailTable tbody').innerHTML = '';
+    return;
+  }
+  const path = base + '/data/snapshots/' + currentSnapshotFile;
+  const { data } = await fetchCSV(path);
+  const rows = data.filter(r => r.market_key === currentMarket);
+  currentRows = rows;
+  renderDetailTable(rows);
+  document.getElementById('detailSub').textContent = `Viser ${rows.length} annonser for ${currentMarket}.`;
+}
 
 async function init() {
   try {
     const { data } = await fetchCSV(SUMMARY_PATH);
     allSummary = data;
-    // render oversikt
     renderSummaryTable(allSummary);
+    drawMarketChart(allSummary);
 
     // fyll select
     const sel = document.getElementById('marketSelect');
@@ -232,7 +264,7 @@ async function init() {
     data.forEach(r => {
       const opt = document.createElement('option');
       opt.value = r.market_key;
-      opt.textContent = `${r.market_key} (${r.market_key.replace('_no','')})`;
+      opt.textContent = r.market_key;
       sel.appendChild(opt);
     });
 
@@ -264,24 +296,10 @@ async function init() {
       );
       renderDetailTable(filtered);
     });
-
   } catch(e) {
-    console.error('Feil ved last av summary:', e);
-    document.getElementById('marketCount').textContent = 'Klarte ikke å laste summary-data.';
+    console.error(e);
+    document.getElementById('marketCount').textContent = 'Klarte ikke å laste data.';
   }
-}
-
-async function loadMarketDetail() {
-  if (!currentSnapshotFile) {
-    document.querySelector('#detailTable tbody').innerHTML = '';
-    return;
-  }
-  const path = base + '/data/snapshots/' + currentSnapshotFile;
-  const { data } = await fetchCSV(path);
-  const rows = data.filter(r => r.market_key === currentMarket);
-  currentRows = rows;
-  renderDetailTable(rows);
-  document.getElementById('detailSub').textContent = `Viser ${rows.length} annonser for ${currentMarket}.`;
 }
 
 init();
