@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="no">
+<head>
+  <meta charset="utf-8" />
+  <title>Rental Stats v1</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root{
+      --bg:#f8f9fa; --card:#fff; --ink:#111; --muted:#666;
+      --line:#e5e7eb; --brand:#0a58ca; --ok:#198754; --shadow:0 1px 2px rgba(0,0,0,.05);
+    }
+    body{margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; color:var(--ink); background:var(--bg)}
+    header{background:var(--card); border-bottom:1px solid var(--line); box-shadow:var(--shadow); padding:10px 16px; display:flex; align-items:center; justify-content:space-between}
+    .brand{display:flex; align-items:center; gap:10px; font-weight:700}
+    .brand-badge{width:28px; height:28px; border-radius:6px; background:var(--brand); display:grid; place-items:center; color:#fff; font-weight:800}
+    main{max-width:1200px; margin:18px auto; padding:0 16px}
+    .controls{display:flex; gap:12px; flex-wrap:wrap; margin:12px 0}
+    select,input{padding:8px 10px; border:1px solid var(--line); border-radius:8px; background:#fff}
+    .pill{background:#f3f4f6; padding:6px 10px; border-radius:999px; font-size:12px; color:#333}
+    .kpis{display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:12px; margin:14px 0}
+    .kpi{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; box-shadow:var(--shadow)}
+    .kpi h3{margin:0 0 8px; font-size:12px; color:var(--muted); text-transform:uppercase}
+    .kpi .val{font-size:24px; font-weight:800}
+    .row{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+    @media(max-width:900px){.row{grid-template-columns:1fr}}
+    .card{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; box-shadow:var(--shadow); margin-top:16px}
+    h2{margin:0 0 10px; font-size:16px}
+    .small{font-size:12px; color:var(--muted)}
+    table{width:100%; border-collapse:collapse}
+    th,td{padding:10px 12px; border-top:1px solid var(--line)}
+    th{background:#fafafa; position:sticky; top:0; z-index:1; text-align:left}
+    td.right,th.right{text-align:right}
+    .scroll{max-height:420px; overflow:auto}
+    canvas{max-width:100%; height:300px}
+    footer{max-width:1200px; margin:24px auto; padding:0 16px; color:var(--muted); font-size:12px}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-badge">R</div>
+      <div>Rental Stats v1</div>
+    </div>
+    <div class="pill">Snapshot: <span id="hdrSnapshot">–</span></div>
+  </header>
+
+  <main>
+    <div class="controls">
+      <label>Marked
+        <select id="marketSelect"></select>
+      </label>
+      <label>Søk
+        <input id="searchInput" type="text" placeholder="Adresse, postnr, tittel">
+      </label>
+      <span id="snapshotBadge" class="pill"></span>
+    </div>
+
+    <!-- KPI -->
+    <section class="kpis">
+      <div class="kpi"><h3>Antall</h3><div id="kpiListings" class="val">–</div></div>
+      <div class="kpi"><h3>Snittpris</h3><div id="kpiAvgPrice" class="val">–</div></div>
+      <div class="kpi"><h3>Snitt kvm</h3><div id="kpiAvgSqm" class="val">–</div></div>
+      <div class="kpi"><h3>Pris/kvm</h3><div id="kpiPpk" class="val">–</div></div>
+    </section>
+
+    <!-- Grafer -->
+    <section class="row">
+      <div class="card"><h2>Snittpris per marked</h2><canvas id="marketChart"></canvas></div>
+      <div class="card"><h2>Snittpris per soverom</h2><canvas id="bedsChart"></canvas></div>
+    </section>
+
+    <!-- Tabeller -->
+    <section class="card">
+      <h2>Oversikt per marked</h2>
+      <table id="summaryTable">
+        <thead><tr>
+          <th>Marked</th><th>Dato</th>
+          <th class="right">Antall</th>
+          <th class="right">Snitt pris</th>
+          <th class="right">Snitt kvm</th>
+          <th class="right">Snitt pris/kvm</th>
+        </tr></thead><tbody></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Detaljer valgt marked</h2>
+      <div class="small" id="detailSub"></div>
+      <div class="scroll">
+        <table id="detailTable">
+          <thead><tr>
+            <th>Tittel</th><th>Adresse</th><th>Postnr</th><th>By</th>
+            <th class="right">Kvm</th><th class="right">Soverom</th>
+            <th class="right">Pris</th><th class="right">Pris/kvm</th>
+          </tr></thead><tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer>© 2025 Rental Stats – Powered by Alenta</footer>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    const base=(location.origin+location.pathname).replace(/\/index_v1\.html$/,'').replace(/\/$/,'');
+    const SUMMARY=base+'/data/summaries/markets_summary.csv';
+    const BEDS=base+'/data/summaries/markets_by_bedrooms.csv';
+    let allSummary=[],currentMarket=null,currentSnapshotFile=null,currentRows=[];
+    let marketChart,bedsChart;
+    function nf(v){return(!v||isNaN(+v))?'–':(+v).toLocaleString('no-NO',{maximumFractionDigits:0});}
+    async function fetchCSV(url){const r=await fetch(url+'?c='+Date.now());const t=await r.text();
+      const l=t.trim().split(/\r?\n/);const h=l.shift().split(',');return l.map(x=>{
+        const c=x.split(',');const o={};h.forEach((hh,i)=>o[hh]=c[i]||'');return o;});}
+    function renderSummaryTable(rows){const tb=document.querySelector('#summaryTable tbody');tb.innerHTML='';
+      rows.forEach(r=>{tb.innerHTML+=`<tr><td>${r.market_key}</td><td>${r.snapshot_date}</td>
+      <td class="right">${nf(r.listings)}</td><td class="right">${nf(r.avg_price)}</td>
+      <td class="right">${nf(r.avg_sqm)}</td><td class="right">${nf(r.avg_price_per_sqm)}</td></tr>`;});}
+    function renderDetailTable(rows){const tb=document.querySelector('#detailTable tbody');tb.innerHTML='';
+      rows.forEach(r=>{tb.innerHTML+=`<tr>
+      <td><a href="${r.url}" target="_blank">${r.title||'–'}</a></td>
+      <td>${r.address||''}</td><td>${r.postal_code||''}</td><td>${r.city||''}</td>
+      <td class="right">${nf(r.sqm)}</td><td class="right">${nf(r.bedrooms)}</td>
+      <td class="right">${nf(r.price_nok)}</td><td class="right">${nf(r.price_per_sqm)}</td></tr>`;});}
+    function renderKpis(r){document.getElementById('kpiListings').textContent=nf(r?.listings);
+      document.getElementById('kpiAvgPrice').textContent=nf(r?.avg_price);
+      document.getElementById('kpiAvgSqm').textContent=nf(r?.avg_sqm);
+      document.getElementById('kpiPpk').textContent=nf(r?.avg_price_per_sqm);
+      document.getElementById('hdrSnapshot').textContent=r?.snapshot_date||'–';}
+    function drawMarketChart(rows){const ctx=document.getElementById('marketChart').getContext('2d');
+      if(marketChart)marketChart.destroy();marketChart=new Chart(ctx,{type:'bar',
+      data:{labels:rows.map(r=>r.market_key),datasets:[{data:rows.map(r=>+r.avg_price||0),backgroundColor:'#0a58ca'}]},
+      options:{plugins:{legend:{display:false}}}});}
+    function drawBedsChart(rows){const ctx=document.getElementById('bedsChart').getContext('2d');
+      if(bedsChart)bedsChart.destroy();bedsChart=new Chart(ctx,{type:'bar',
+      data:{labels:rows.map(r=>`${r.bedrooms} rom`),datasets:[{data:rows.map(r=>+r.avg_price||0),backgroundColor:'#198754'}]},
+      options:{plugins:{legend:{display:false}}}});}
+    async function loadBeds(m){try{const d=await fetchCSV(BEDS);const r=d.filter(x=>x.market_key===m);
+      drawBedsChart(r.sort((a,b)=>(+a.bedrooms||0)-(+b.bedrooms||0)));}catch{}}
+    async function loadDetail(){if(!currentSnapshotFile)return;
+      const d=await fetchCSV(base+'/data/snapshots/'+currentSnapshotFile);
+      const r=d.filter(x=>x.market_key===currentMarket);currentRows=r;renderDetailTable(r);
+      document.getElementById('detailSub').textContent=`${r.length} annonser for ${currentMarket}`;}
+    async function init(){try{const d=await fetchCSV(SUMMARY);allSummary=d;renderSummaryTable(d);drawMarketChart(d);
+      const sel=document.getElementById('marketSelect');sel.innerHTML='';d.forEach(r=>{sel.innerHTML+=`<option>${r.market_key}</option>`;});
+      currentMarket=d[0]?.market_key;currentSnapshotFile=d[0]?.snapshot_file;sel.value=currentMarket;
+      document.getElementById('snapshotBadge').textContent=currentSnapshotFile||'';renderKpis(d[0]);
+      await loadDetail();await loadBeds(currentMarket);
+      sel.onchange=async e=>{currentMarket=e.target.value;const row=allSummary.find(x=>x.market_key===currentMarket);
+        currentSnapshotFile=row?.snapshot_file;document.getElementById('snapshotBadge').textContent=currentSnapshotFile||'';renderKpis(row);
+        await loadDetail();await loadBeds(currentMarket);};
+      document.getElementById('searchInput').oninput=e=>{
+        const q=e.target.value.toLowerCase();if(!q)return renderDetailTable(currentRows);
+        renderDetailTable(currentRows.filter(r=>(r.title||'').toLowerCase().includes(q)||(r.address||'').toLowerCase().includes(q)||(r.postal_code||'').toLowerCase().includes(q)));};}
+      catch(e){console.error(e);}} init();
+  </script>
+</body>
+</html>
