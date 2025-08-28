@@ -25,6 +25,7 @@
     .scroll { max-height:460px; overflow:auto; }
     canvas { max-width:100%; height:320px; }
     .notice { font-size:13px; color:#444; background:#fff6d6; border:1px solid #ffe7a6; padding:8px 10px; border-radius:8px; }
+    .error { color:#b00020; font-size:13px; }
   </style>
 </head>
 <body>
@@ -61,6 +62,7 @@
         <tbody></tbody>
       </table>
       <div class="small" id="summaryNote"></div>
+      <div class="error" id="summaryErr" style="display:none"></div>
     </div>
   </div>
 
@@ -122,6 +124,7 @@
 const base = (location.origin + location.pathname).replace(/\/$/, '');
 const SUMMARY_PATH = base + '/data/summaries/markets_summary.csv';
 const BEDS_PATH    = base + '/data/summaries/markets_by_bedrooms.csv';
+const SNAP_DIR     = base + '/data/snapshots/';
 function historyPath(marketKey){ return base + '/data/history/' + marketKey + '.csv'; }
 
 /* ---------- State ---------- */
@@ -136,29 +139,45 @@ function numberFormat(v, decimals = 0) {
   if (v === undefined || v === null || v === '' || isNaN(+v)) return '';
   return (+v).toLocaleString('no-NO', { maximumFractionDigits: decimals, minimumFractionDigits: decimals });
 }
-async function fetchText(url){
-  const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'cache=' + Date.now());
-  if (!res.ok) throw new Error('HTTP ' + res.status + ' @ ' + url);
-  return res.text();
-}
-async function fetchCSV(url) {
-  const text = await fetchText(url);
-  const lines = text.trim().split(/\r?\n/);
-  const headers = (lines.shift() || '').split(',').map(h => h.trim());
-  const data = lines.map(line => {
-    // enkel CSV uten siterte komma – datasettene våre er "rene"
-    const cells = line.split(',').map(s => s.trim());
-    const row = {};
-    headers.forEach((h,i)=> row[h] = (cells[i] ?? ''));
-    return row;
-  });
-  return { headers, data };
-}
 function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+
+/* Robust CSV parser (håndterer siterte felt) */
+function parseCSV(text){
+  const rows = [];
+  let row = [], cell = '', inQuotes = false;
+  for (let i=0; i<text.length; i++){
+    const c = text[i];
+    const next = text[i+1];
+    if (inQuotes){
+      if (c === '"' && next === '"'){ cell += '"'; i++; }
+      else if (c === '"'){ inQuotes = false; }
+      else { cell += c; }
+    } else {
+      if (c === '"'){ inQuotes = true; }
+      else if (c === ','){ row.push(cell); cell = ''; }
+      else if (c === '\n'){ row.push(cell); rows.push(row); row = []; cell = ''; }
+      else if (c === '\r'){ /* skip */ }
+      else { cell += c; }
+    }
+  }
+  if (cell.length || row.length) { row.push(cell); rows.push(row); }
+  const headers = (rows.shift() || []).map(h=>h.trim());
+  return rows.map(r=>{
+    const o={}; headers.forEach((h,i)=>o[h]= (r[i] ?? '').trim()); return o;
+  });
+}
+
+/* Fetch wrapper med cache-buster */
+async function fetchCSV(url){
+  const res = await fetch(url + (url.includes('?')?'&':'?') + 'cache=' + Date.now());
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' @ ' + url);
+  const txt = await res.text();
+  return parseCSV(txt);
+}
 
 /* ---------- Tabeller ---------- */
 function renderSummaryTable(rows) {
-  const tb = document.getElementById('summaryTable').querySelector('tbody');
+  const tb = document.querySelector('#summaryTable tbody');
   tb.innerHTML = '';
   rows.forEach(r => {
     const tr = document.createElement('tr');
@@ -181,19 +200,19 @@ function renderSummaryTable(rows) {
 }
 
 function renderDetailTable(rows) {
-  const tb = document.getElementById('detailTable').querySelector('tbody');
+  const tb = document.querySelector('#detailTable tbody');
   tb.innerHTML = '';
-  let missingAddresses = 0;
-  rows.forEach(r => {
+  let missing = 0;
+  rows.forEach(r=>{
     const tr = document.createElement('tr');
     const title = r.title || 'Bildegalleri';
     const addr  = r.address || '';
     const city  = r.city || r.area || '';
-    if (!addr && !city) missingAddresses++;
+    if (!addr && !city) missing++;
     tr.innerHTML = `
       <td><a href="${r.url}" target="_blank" rel="noopener">${escapeHtml(title)}</a></td>
       <td>${escapeHtml(addr)}</td>
-      <td>${escapeHtml(r.postal_code || '')}</td>
+      <td>${escapeHtml(r.postal_code||'')}</td>
       <td>${escapeHtml(city)}</td>
       <td class="right">${numberFormat(r.sqm)}</td>
       <td class="right">${numberFormat(r.bedrooms)}</td>
@@ -202,7 +221,7 @@ function renderDetailTable(rows) {
     `;
     tb.appendChild(tr);
   });
-  document.getElementById('addressNotice').style.display = missingAddresses ? 'block' : 'none';
+  document.getElementById('addressNotice').style.display = missing ? 'block' : 'none';
 }
 
 /* ---------- Grafer ---------- */
@@ -210,8 +229,8 @@ function drawMarketChart(rows) {
   const ctx = document.getElementById('marketChart').getContext('2d');
   if (marketChart) marketChart.destroy();
   const labels = rows.map(r=>r.market_key);
-  const avg    = rows.map(r=>+r.avg_price||0);
-  const med    = rows.map(r=>+r.median_price||0);
+  const avg    = rows.map(r=>r.avg_price||0);
+  const med    = rows.map(r=>r.median_price||0);
   marketChart = new Chart(ctx, {
     type: 'bar',
     data: {
@@ -228,13 +247,13 @@ function drawMarketChart(rows) {
 function drawBedsChart(rows) {
   const ctx = document.getElementById('bedsChart').getContext('2d');
   if (bedsChart) bedsChart.destroy();
-  rows.sort((a,b)=> (+a.bedrooms||0) - (+b.bedrooms||0));
+  const sorted = [...rows].sort((a,b)=> (a.bedrooms||0)-(b.bedrooms||0));
   bedsChart = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: rows.map(r=>`${r.bedrooms} soverom`),
+      labels: sorted.map(r=>`${r.bedrooms} soverom`),
       datasets: [
-        { label: 'Snitt pris (NOK)', data: rows.map(r=>+r.avg_price||0), backgroundColor: '#198754' }
+        { label: 'Snitt pris (NOK)', data: sorted.map(r=>r.avg_price||0), backgroundColor: '#198754' }
       ]
     },
     options: { responsive:true, plugins:{ legend:{ display:false } } }
@@ -249,64 +268,104 @@ function drawTimeseriesChart(points) {
     data: {
       labels: points.map(p=>p.date),
       datasets: [
-        { label: 'Snitt pris (NOK)', data: points.map(p=>p.avg), borderColor: '#0a58ca', backgroundColor: 'rgba(10,88,202,.15)', fill: true, tension: .2 },
-        { label: 'Median pris (NOK)', data: points.map(p=>p.median), borderColor: '#198754', backgroundColor: 'rgba(25,135,84,.15)', fill: true, tension: .2 }
+        { label: 'Snitt pris (NOK)',   data: points.map(p=>p.avg),    borderColor:'#0a58ca', backgroundColor:'rgba(10,88,202,.15)', fill:true, tension:.2 },
+        { label: 'Median pris (NOK)', data: points.map(p=>p.median), borderColor:'#198754', backgroundColor:'rgba(25,135,84,.15)', fill:true, tension:.2 }
       ]
     },
-    options: { responsive:true, plugins:{ legend:{ position:'bottom' } }, scales:{ y:{ beginAtZero:false } } }
+    options: { responsive:true, plugins:{ legend:{ position:'bottom' } } }
   });
 }
 
 /* ---------- Lastere ---------- */
+function coerceSummary(row){
+  // gjør om tekst → tall for relevante felter
+  const num = k => {
+    const v = (row[k] ?? '').toString().replace(/\s/g,'').replace(',', '.');
+    const n = Number(v);
+    return Number.isFinite(n) ? n : 0;
+  };
+  return {
+    ...row,
+    listings: num('listings'),
+    avg_price: num('avg_price'),
+    median_price: num('median_price'),
+    p25_price: num('p25_price'),
+    p75_price: num('p75_price'),
+    avg_sqm: num('avg_sqm'),
+    avg_price_per_sqm: num('avg_price_per_sqm')
+  };
+}
+function coerceDetail(row){
+  const toNum = k => {
+    const v = (row[k] ?? '').toString().replace(/\s/g,'').replace(',', '.');
+    const n = Number(v); return Number.isFinite(n) ? n : '';
+  };
+  return {
+    ...row,
+    price_nok: toNum('price_nok'),
+    sqm: toNum('sqm'),
+    bedrooms: toNum('bedrooms'),
+    price_per_sqm: toNum('price_per_sqm')
+  };
+}
+
 async function loadBedsSummary(marketKey) {
+  const wrap = document.getElementById('bedsTableWrap');
+  wrap.innerHTML = '';
   try {
-    const { data } = await fetchCSV(BEDS_PATH);
-    const rows = data.filter(r => r.market_key === marketKey);
-    renderBedsTable(rows);
-    drawBedsChart(rows);
+    const rowsRaw = await fetchCSV(BEDS_PATH);
+    const filtered = rowsRaw.filter(r => r.market_key === marketKey).map(r => ({
+      ...r,
+      bedrooms: Number((r.bedrooms||'').toString().replace(/\s/g,'')),
+      listings: Number((r.listings||'0').toString().replace(/\s/g,'')),
+      avg_price: Number((r.avg_price||'0').toString().replace(/\s/g,'').replace(',', '.')),
+      avg_sqm: Number((r.avg_sqm||'0').toString().replace(/\s/g,'').replace(',', '.')),
+      avg_price_per_sqm: Number((r.avg_price_per_sqm||'0').toString().replace(/\s/g,'').replace(',', '.')),
+    }));
+    // tabell
+    const tbl = document.createElement('table');
+    const thead = document.createElement('thead');
+    thead.innerHTML = `
+      <tr>
+        <th class="right">Soverom</th>
+        <th class="right">Antall</th>
+        <th class="right">Snitt pris</th>
+        <th class="right">Snitt kvm</th>
+        <th class="right">Snitt pris/kvm</th>
+      </tr>`;
+    const tbody = document.createElement('tbody');
+    filtered.sort((a,b)=> (a.bedrooms||0)-(b.bedrooms||0)).forEach(r=>{
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="right">${numberFormat(r.bedrooms)}</td>
+        <td class="right">${numberFormat(r.listings)}</td>
+        <td class="right">${numberFormat(r.avg_price)}</td>
+        <td class="right">${numberFormat(r.avg_sqm)}</td>
+        <td class="right">${numberFormat(r.avg_price_per_sqm)}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+    tbl.appendChild(thead); tbl.appendChild(tbody);
+    wrap.appendChild(tbl);
+    // graf
+    drawBedsChart(filtered);
   } catch (e) {
     console.warn('Ingen beds-summary:', e);
-    document.getElementById('bedsTableWrap').innerHTML = '<div class="small">Ingen data tilgjengelig.</div>';
+    wrap.innerHTML = '<div class="small">Ingen data tilgjengelig.</div>';
     if (bedsChart) bedsChart.destroy();
   }
 }
-function renderBedsTable(rows) {
-  const wrap = document.getElementById('bedsTableWrap');
-  wrap.innerHTML = '';
-  const tbl = document.createElement('table');
-  const thead = document.createElement('thead');
-  thead.innerHTML = `
-    <tr>
-      <th class="right">Soverom</th>
-      <th class="right">Antall</th>
-      <th class="right">Snitt pris</th>
-      <th class="right">Snitt kvm</th>
-      <th class="right">Snitt pris/kvm</th>
-    </tr>`;
-  const tbody = document.createElement('tbody');
-  rows.forEach(r=>{
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td class="right">${numberFormat(r.bedrooms)}</td>
-      <td class="right">${numberFormat(r.listings)}</td>
-      <td class="right">${numberFormat(r.avg_price)}</td>
-      <td class="right">${numberFormat(r.avg_sqm)}</td>
-      <td class="right">${numberFormat(r.avg_price_per_sqm)}</td>
-    `;
-    tbody.appendChild(tr);
-  });
-  tbl.appendChild(thead); tbl.appendChild(tbody);
-  wrap.appendChild(tbl);
-}
 
 async function loadMarketDetail() {
+  const tb = document.querySelector('#detailTable tbody');
+  tb.innerHTML = '';
   if (!currentSnapshotFile) {
-    document.getElementById('detailTable').querySelector('tbody').innerHTML = '';
+    document.getElementById('detailSub').textContent = 'Ingen snapshot valgt.';
     return;
   }
-  const path = base + '/data/snapshots/' + currentSnapshotFile;
-  const { data } = await fetchCSV(path);
-  const rows = data.filter(r => r.market_key === currentMarket);
+  const path = SNAP_DIR + currentSnapshotFile;
+  const raw = await fetchCSV(path);
+  const rows = raw.filter(r=> r.market_key === currentMarket).map(coerceDetail);
   currentRows = rows;
   renderDetailTable(rows);
   document.getElementById('detailSub').textContent = `Viser ${rows.length} annonser for ${currentMarket}.`;
@@ -316,14 +375,13 @@ async function loadTimeseries(marketKey) {
   const url = historyPath(marketKey);
   let points = [];
   try {
-    const { data } = await fetchCSV(url);
+    const data = await fetchCSV(url);
     const byDate = {};
-    data.forEach(r => {
+    data.forEach(r=>{
       const d = r.snapshot_date || r.date || '';
-      if (!d) return;
-      const price = +r.price_nok || 0;
-      if (!byDate[d]) byDate[d] = [];
-      if (price) byDate[d].push(price);
+      const price = Number((r.price_nok||'').toString().replace(/\s/g,'').replace(',', '.'));
+      if (!d || !Number.isFinite(price)) return;
+      (byDate[d] ||= []).push(price);
     });
     Object.entries(byDate).sort((a,b)=> a[0].localeCompare(b[0])).forEach(([date, arr])=>{
       const avg = arr.reduce((s,x)=>s+x,0)/arr.length;
@@ -333,44 +391,44 @@ async function loadTimeseries(marketKey) {
   } catch (e) {
     console.warn('Ingen history-fil for', marketKey, e);
     const row = allSummary.find(x=>x.market_key===marketKey);
-    if (row) points = [{ date: row.snapshot_date, avg: +row.avg_price||0, median: +row.median_price||0 }];
+    if (row) points = [{ date: row.snapshot_date, avg: row.avg_price||0, median: row.median_price||0 }];
     document.getElementById('timeseriesNote').innerText =
       'Historikkfil mangler – viser siste snapshot. For tidsserie, sørg for at data/history/' + marketKey + '.csv publiseres.';
   }
   drawTimeseriesChart(points);
 }
-function median(arr) {
-  if (!arr.length) return 0;
-  const a = [...arr].sort((x,y)=>x-y);
-  const mid = Math.floor(a.length/2);
-  return a.length%2 ? a[mid] : (a[mid-1]+a[mid])/2;
-}
+function median(arr){ if(!arr.length) return 0; const a=[...arr].sort((x,y)=>x-y); const m=Math.floor(a.length/2); return a.length%2?a[m]:(a[m-1]+a[m])/2; }
 
 /* ---------- Init ---------- */
 async function init() {
   try {
-    const { data } = await fetchCSV(SUMMARY_PATH);
-    allSummary = data;
+    const rowsRaw = await fetchCSV(SUMMARY_PATH);
+    // parse tall riktig
+    allSummary = rowsRaw.map(coerceSummary);
 
-    // oversikt & graf over markeder
+    if (!allSummary.length){
+      document.getElementById('summaryErr').style.display='block';
+      document.getElementById('summaryErr').textContent = 'Ingen rader i markets_summary.csv';
+    }
+
     renderSummaryTable(allSummary);
     drawMarketChart(allSummary);
 
-    // fyll select
     const sel = document.getElementById('marketSelect');
     sel.innerHTML = '';
-    data.forEach(r => {
+    allSummary.forEach(r=>{
       const opt = document.createElement('option');
       opt.value = r.market_key;
       opt.textContent = r.market_key;
       sel.appendChild(opt);
     });
-    currentMarket = data[0]?.market_key || null;
-    currentSnapshotFile = data[0]?.snapshot_file || null;
+
+    currentMarket = allSummary[0]?.market_key || null;
+    currentSnapshotFile = allSummary[0]?.snapshot_file || null;
     sel.value = currentMarket || '';
     document.getElementById('snapshotBadge').textContent = currentSnapshotFile || '';
 
-    if (currentMarket) {
+    if (currentMarket){
       await loadMarketDetail();
       await loadBedsSummary(currentMarket);
       await loadTimeseries(currentMarket);
@@ -399,9 +457,12 @@ async function init() {
       renderDetailTable(filtered);
     });
 
-  } catch(e) {
-    console.error('Klarte ikke å laste summary-data:', e);
+  } catch (e) {
+    console.error(e);
     document.getElementById('marketCount').textContent = 'Klarte ikke å laste data.';
+    const err = document.getElementById('summaryErr');
+    err.style.display='block';
+    err.textContent = e.message;
   }
 }
 
