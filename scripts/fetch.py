@@ -30,17 +30,16 @@ def to_int(s):
         return None
 
 def monthly_from_text(amount, context):
-    """Normaliser til månedspris basert på tekstkontekst (uke/dag/natt)."""
     if amount is None:
         return None
     ctx = (context or "").lower()
-    if any(w in ctx for w in ["per mnd", "pr mnd", "mnd", "måned", "månedlig", "per month", "monthly"]):
+    if any(w in ctx for w in ["mnd", "måned", "monthly", "per mnd", "pr mnd"]):
         return amount
-    if any(w in ctx for w in ["per uke", "pr uke", "uke", "weekly", "per week"]):
+    if any(w in ctx for w in ["uke", "weekly", "per uke"]):
         return int(round(amount * 4.35))
-    if any(w in ctx for w in ["per dag", "pr dag", "dag", "per natt", "natt", "daily", "night"]):
+    if any(w in ctx for w in ["dag", "natt", "daily", "night"]):
         return int(round(amount * 30))
-    return amount  # default: månedspris
+    return amount
 
 def fetch(url, ua):
     r = requests.get(url, headers={"User-Agent": ua}, timeout=30)
@@ -63,13 +62,6 @@ def extract_all_ad_urls_from_search_html(html):
             href = "https://www.finn.no" + href
         if RE_AD_HREF.search(href):
             urls.add(href.split("#")[0])
-    # fallback: regex direkte i HTML om DOM ikke ga treff
-    if not urls:
-        for m in RE_AD_HREF.finditer(html):
-            h = m.group(0)
-            if not h.startswith("http"):
-                h = "https://" + h
-            urls.add(h.split("#")[0])
     return sorted(urls)
 
 def finn_id_from_any(url, html=None):
@@ -85,23 +77,12 @@ def finn_id_from_any(url, html=None):
                 return m2.group(1)
     return ""
 
-def parse_detail(html):
-    soup = BeautifulSoup(html, "html.parser")
-    text_all = soup.get_text(" ", strip=True)
-
-    # Tittel
-    title = ""
-    h = soup.find(["h1", "h2"])
-    if h:
-        title = h.get_text(strip=True)
-    ogt = soup.find("meta", attrs={"property": "og:title"})
-    if ogt and ogt.get("content") and (not title or "bildegalleri" in title.lower()):
-        title = ogt["content"].strip()
-
-    # Pris (meta/JSON-LD først)
+# ---------- Pris-henter ----------
+def extract_price(soup, text_all):
     price = None
-    period_ctx = ""
+    ctx = ""
 
+    # 1) Meta-tags
     for sel in [
         ('meta', {'property': 'product:price:amount'}, 'content'),
         ('meta', {'itemprop': 'price'}, 'content'),
@@ -112,6 +93,7 @@ def parse_detail(html):
             price = to_int(tag.get(sel[2]))
             break
 
+    # 2) JSON-LD
     if price is None:
         for s in soup.find_all("script", type="application/ld+json"):
             try:
@@ -129,18 +111,51 @@ def parse_detail(html):
                     p = offers.get("price") or (offers.get("priceSpecification") or {}).get("price")
                     if p:
                         price = to_int(p)
-                        period_ctx = json.dumps(offers).lower()
+                        ctx = json.dumps(offers).lower()
                         break
-            if price is not None:
+            if price:
                 break
 
+    # 3) Key/Value-liste (eks "Leie per måned")
     if price is None:
-        candidates = [to_int(m.group(1)) for m in RE_PRICE_TXT.finditer(text_all)]
-        candidates = [c for c in candidates if (c or 0) >= 3000]  # filtrer småbeløp (strøm etc.)
-        if candidates:
-            price = max(candidates)
+        for label in soup.find_all(["dt","th"]):
+            if not label.get_text(strip=True):
+                continue
+            text = label.get_text(strip=True).lower()
+            if any(k in text for k in ["leie", "totalpris", "månedsleie", "per måned"]):
+                val = label.find_next(["dd","td"])
+                if val:
+                    m = RE_PRICE_TXT.search(val.get_text(" ", strip=True))
+                    if m:
+                        price = to_int(m.group(1))
+                        ctx = val.get_text(" ", strip=True)
+                        break
 
-    price_mo = monthly_from_text(price, period_ctx or text_all)
+    # 4) Regex fallback
+    if price is None:
+        m = RE_PRICE_TXT.findall(text_all)
+        if m:
+            candidates = [to_int(x) for x in m if to_int(x) and to_int(x) > 3000]
+            if candidates:
+                price = max(candidates)
+
+    return monthly_from_text(price, ctx or text_all)
+
+# ---------- Parser ----------
+def parse_detail(html):
+    soup = BeautifulSoup(html, "html.parser")
+    text_all = soup.get_text(" ", strip=True)
+
+    # Tittel
+    title = ""
+    h = soup.find(["h1","h2"])
+    if h: title = h.get_text(strip=True)
+    ogt = soup.find("meta", attrs={"property": "og:title"})
+    if ogt and ogt.get("content"):
+        title = ogt["content"].strip()
+
+    # Pris
+    price_mo = extract_price(soup, text_all)
 
     # Kvm
     sqm = None
@@ -149,54 +164,28 @@ def parse_detail(html):
 
     # Soverom
     bedrooms = None
-    label = soup.find(string=re.compile(r"^\s*Soverom\s*$", re.I))
-    if label:
-        try:
-            val = label.find_parent().find_next().get_text(" ", strip=True)
-            m2 = re.search(r"\d+", val)
-            if m2:
-                bedrooms = int(m2.group(0))
-        except:
-            pass
-    if bedrooms is None:
-        m = RE_BED_TXT.search(text_all)
-        if m:
-            try:
-                bedrooms = int(m.group(1))
-            except:
-                pass
+    m = RE_BED_TXT.search(text_all)
+    if m:
+        bedrooms = int(m.group(1))
 
-    # Adresse / område
+    # Adresse
     address = city = postal = area = ""
     for s in soup.find_all("script", type="application/ld+json"):
         try:
             data = json.loads(s.string) if s.string else None
         except:
             continue
-        items = data if isinstance(data, list) else [data] if data else []
-        for it in items:
-            if isinstance(it, dict) and isinstance(it.get("address"), dict):
-                a = it["address"]
+        if isinstance(data, dict) and "address" in data:
+            a = data["address"]
+            if isinstance(a, dict):
                 address = a.get("streetAddress") or address
                 city    = a.get("addressLocality") or a.get("addressRegion") or city
                 postal  = a.get("postalCode") or postal
                 area    = a.get("addressRegion") or area
-        if address or city or postal or area:
-            break
-
-    if not address:
-        lab = soup.find(string=re.compile(r"^Adresse:?$", re.I))
-        if lab:
-            try:
-                val = lab.find_parent().find_next().get_text(" ", strip=True)
-                if val:
-                    address = val
-            except:
-                pass
 
     return {
         "title": title,
-        "price_nok": price_mo if price_mo is not None else "",
+        "price_nok": price_mo if price_mo else "",
         "sqm": sqm or "",
         "bedrooms": bedrooms or "",
         "address": address,
@@ -205,8 +194,8 @@ def parse_detail(html):
         "area": area,
     }
 
+# ---------- Hovedløp ----------
 def run_market(market, gcfg):
-    # globale grenser/innstillinger
     ua         = gcfg.get("user_agent", "RentalStatsBot/1.0")
     max_pages  = int(gcfg.get("max_pages", 40))
     page_sleep = float(gcfg.get("page_sleep_sec", 1.5))
@@ -220,78 +209,54 @@ def run_market(market, gcfg):
     key   = market["key"]
     base  = market["search_url"]
 
-    # ---------- 1) Samle lenker fra ALLE sider ----------
+    # --- 1) Paginering ---
     ad_urls = []
-    for page in range(1, max_pages + 1):
+    for page in range(1, max_pages+1):
         url = build_page_url(base, page)
         try:
             html = fetch(url, ua)
         except Exception as e:
-            print(f"[{key}] Feil ved henting av resultatside {page}: {e}")
+            print(f"[{key}] feil på side {page}: {e}")
             break
-
         (RAW / f"{key}_search_{page}.html").write_text(html, encoding="utf-8")
-
         urls = extract_all_ad_urls_from_search_html(html)
-        new  = [u for u in urls if u not in ad_urls]
+        new = [u for u in urls if u not in ad_urls]
         ad_urls.extend(new)
-
         print(f"[{key}] page {page}: {len(new)} nye lenker (totalt {len(ad_urls)})")
-
-        # stopp når ingen nye
-        if page > 1 and len(new) == 0:
+        if page>1 and not new:
             break
-
         time.sleep(page_sleep)
 
-    ad_urls = list(dict.fromkeys(ad_urls))  # dedupe, behold rekkefølge
-    print(f"[{key}] Totalt {len(ad_urls)} annonse-URLer funnet før filtrering")
+    ad_urls = list(dict.fromkeys(ad_urls))
+    print(f"[{key}] Totalt {len(ad_urls)} URLer")
 
-    # ---------- 2) Besøk annonser ----------
+    # --- 2) Parse annonser ---
     rows = []
-    dropped_no_price = dropped_outlier_price = dropped_outlier_sqm = 0
-
-    for i, u in enumerate(ad_urls, 1):
+    dropped = {"no_price":0,"price":0,"sqm":0}
+    for i,u in enumerate(ad_urls,1):
         try:
             html = fetch(u, ua)
         except Exception as e:
             print(f"[{key}] fetch-feil {u}: {e}")
             continue
-
         fid = finn_id_from_any(u, html) or str(i)
         (RAW / f"{key}_ad_{fid}.html").write_text(html, encoding="utf-8")
-
         d = parse_detail(html)
 
         if not d["price_nok"]:
-            dropped_no_price += 1
+            dropped["no_price"] += 1
             continue
-
         price_val = int(d["price_nok"])
         if not (min_price < price_val < max_price):
-            dropped_outlier_price += 1
+            dropped["price"] += 1
+            continue
+        sqm_val = to_int(d["sqm"]) if d["sqm"] else None
+        if sqm_val and (sqm_val<min_sqm or sqm_val>max_sqm):
+            dropped["sqm"] += 1
             continue
 
-        sqm_val = None
-        if d["sqm"]:
-            try:
-                sqm_val = int(d["sqm"])
-            except:
-                sqm_val = None
-
-        if sqm_val is not None and (sqm_val < min_sqm or sqm_val > max_sqm):
-            dropped_outlier_sqm += 1
-            continue
-
-        ppk = ""
-        if sqm_val:
-            try:
-                ppk = round(price_val / sqm_val)
-            except:
-                ppk = ""
-
-        addr_key = "|".join(x.lower() for x in [d["address"], d["postal_code"], d["city"]] if x)
-
+        ppk = round(price_val/sqm_val) if sqm_val else ""
+        addr_key = "|".join(x.lower() for x in [d["address"],d["postal_code"],d["city"]] if x)
         rows.append({
             "snapshot_date": today,
             "market_key": key,
@@ -304,44 +269,32 @@ def run_market(market, gcfg):
             "price_per_sqm": ppk,
             "address": d["address"],
             "postal_code": d["postal_code"],
-            "city": d["city"] or d.get("area", ""),
-            "area": d.get("area", ""),
-            "address_key": addr_key,
+            "city": d["city"] or d.get("area",""),
+            "area": d.get("area",""),
+            "address_key": addr_key
         })
-
         time.sleep(ad_sleep)
 
-    kept = len(rows)
-    print(f"[{key}] Beholdt {kept} annonser. Droppet: "
-          f"{dropped_no_price} uten pris, "
-          f"{dropped_outlier_price} utenfor prisgrense, "
-          f"{dropped_outlier_sqm} utenfor kvm-grense")
+    print(f"[{key}] beholdt {len(rows)} annonser. Droppet: {dropped}")
 
-    # ---------- 3) Skriv snapshot + historikk ----------
-    fields = ["snapshot_date","market_key","finn_id","title","url",
-              "price_nok","sqm","bedrooms","price_per_sqm",
-              "address","postal_code","city","area","address_key"]
+    # --- 3) Lagre snapshot + history ---
+    fields=["snapshot_date","market_key","finn_id","title","url","price_nok","sqm","bedrooms","price_per_sqm","address","postal_code","city","area","address_key"]
     snap_fp = SNAP / f"{key}_{today}.csv"
-    with open(snap_fp, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader()
-        w.writerows(rows)
-
+    with open(snap_fp,"w",newline="",encoding="utf-8") as f:
+        w=csv.DictWriter(f,fieldnames=fields); w.writeheader(); w.writerows(rows)
     hist_fp = HIST / f"{key}.csv"
     write_header = not hist_fp.exists()
-    with open(hist_fp, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        if write_header:
-            w.writeheader()
+    with open(hist_fp,"a",newline="",encoding="utf-8") as f:
+        w=csv.DictWriter(f,fieldnames=fields)
+        if write_header: w.writeheader()
         w.writerows(rows)
-
-    print(f"[{key}] lagret {kept} rader -> {snap_fp.name} og appendet til history/{key}.csv")
+    print(f"[{key}] skrevet {snap_fp.name} og appendet {hist_fp.name}")
 
 def main():
-    cfg = yaml.safe_load((ROOT / "config.yaml").read_text(encoding="utf-8"))
-    gcfg = cfg.get("global", {})
+    cfg=yaml.safe_load((ROOT/"config.yaml").read_text(encoding="utf-8"))
+    gcfg=cfg.get("global",{})
     for m in cfg["markets"]:
-        run_market(m, gcfg)
+        run_market(m,gcfg)
 
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
