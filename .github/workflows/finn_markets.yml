@@ -1,20 +1,22 @@
 name: Market stats weekly
 
 on:
-  workflow_dispatch:        # gir "Run workflow"-knapp
+  workflow_dispatch:        # manuelt "Run workflow"-knapp
   push:
     branches: [ main ]      # kjør ved push til main
   schedule:
-    - cron: "0 5 * * *"     # mandager 06:00 UTC
+    - cron: "0 6 * * 1"     # mandager 06:00 UTC
 
 jobs:
   run:
     runs-on: ubuntu-latest
     permissions:
-      contents: write       # nødvendig for git commit/push
+      contents: write       # kreves for git commit/push
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # henter hele historikken (tryggere for rebase)
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -40,7 +42,9 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@users.noreply.github.com"
           git add data/
-          git commit -m "Weekly market scrape" || echo "No changes"
+          git commit -m "Weekly market scrape" || echo "No changes in data"
+          # Hent inn ev. nye commits som kom etter checkout, så push ikke blir avvist
+          git pull --rebase origin main || true
           git push
 
       - name: Copy data into docs for GitHub Pages
@@ -49,4 +53,13 @@ jobs:
           rsync -a --delete data/ docs/data/
           git add docs/data/
           git commit -m "Update docs/data for Pages" || echo "No changes in docs"
+          # Igjen: rebase før push for å unngå rejected updates
+          git pull --rebase origin main || true
           git push
+
+      # (valgfritt) liten oversikt i loggen for feilsøk
+      - name: Show resulting tree
+        run: |
+          echo "==== data/summaries ====" && ls -lah data/summaries || true
+          echo "==== docs/data/summaries ====" && ls -lah docs/data/summaries || true
+          echo "==== docs root ====" && ls -lah docs || true
