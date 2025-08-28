@@ -8,25 +8,27 @@
     :root { font-family: system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
     body { margin: 20px; background:#f9f9f9; }
     h1 { margin: 0 0 12px 0; }
+    h2 { margin: 0 0 10px 0; }
     .muted { color:#666; font-size:14px; margin-bottom:16px; }
     .row { display:flex; gap:20px; flex-wrap:wrap; }
-    .card { border:1px solid #e5e5e5; border-radius:8px; padding:14px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.04); flex:1 1 100%; }
+    .card { border:1px solid #e5e5e5; border-radius:10px; padding:14px; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.05); flex:1 1 100%; }
     table { width:100%; border-collapse:collapse; }
-    th, td { padding:10px 12px; border-top:1px solid #eee; }
+    th, td { padding:10px 12px; border-top:1px solid #eee; vertical-align:top; }
     th { text-align:left; background:#fafafa; position:sticky; top:0; z-index:1; }
     td.right, th.right { text-align:right; }
     .controls { display:flex; gap:14px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
-    select, input[type="text"] { padding:8px 10px; border:1px solid #ddd; border-radius:8px; min-width:220px; }
+    select, input[type="text"] { padding:8px 10px; border:1px solid #ddd; border-radius:8px; min-width:220px; background:#fff; }
     .pill { background:#f4f4f4; padding:6px 10px; border-radius:999px; font-size:12px; }
     .small { font-size:12px; color:#666; }
     a { color:#0a58ca; text-decoration:none; }
     a:hover { text-decoration:underline; }
-    .scroll { max-height:420px; overflow:auto; }
-    canvas { max-width:100%; height:300px; }
+    .scroll { max-height:460px; overflow:auto; }
+    canvas { max-width:100%; height:320px; }
+    .notice { font-size:13px; color:#444; background:#fff6d6; border:1px solid #ffe7a6; padding:8px 10px; border-radius:8px; }
   </style>
 </head>
 <body>
-  <h1>Markeder</h1>
+  <h1>Utleiestatistikk</h1>
   <div id="marketCount" class="muted"></div>
 
   <div class="controls">
@@ -39,21 +41,35 @@
     <span id="snapshotBadge" class="pill"></span>
   </div>
 
-  <div class="card">
-    <h2>Oversikt</h2>
-    <table id="summaryTable">
-      <thead>
-        <tr>
-          <th>Marked</th>
-          <th>Dato</th>
-          <th class="right">Antall</th>
-          <th class="right">Snitt pris</th>
-          <th class="right">Snitt kvm</th>
-          <th class="right">Snitt pris per kvm</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
+  <div class="row">
+    <div class="card">
+      <h2>Oversikt</h2>
+      <table id="summaryTable">
+        <thead>
+          <tr>
+            <th>Marked</th>
+            <th>Dato</th>
+            <th class="right">Antall</th>
+            <th class="right">Snitt pris</th>
+            <th class="right">Median pris</th>
+            <th class="right">P25</th>
+            <th class="right">P75</th>
+            <th class="right">Snitt kvm</th>
+            <th class="right">Snitt pris per kvm</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <div class="small" id="summaryNote"></div>
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:20px;">
+    <div class="card">
+      <h2>Snitt & median per marked</h2>
+      <canvas id="marketChart"></canvas>
+      <div class="small">Viser siste snapshot.</div>
+    </div>
   </div>
 
   <div class="row" style="margin-top:20px;">
@@ -67,7 +83,7 @@
               <th>Tittel</th>
               <th>Adresse</th>
               <th>Postnr</th>
-              <th>By</th>
+              <th>By/område</th>
               <th class="right">Kvm</th>
               <th class="right">Soverom</th>
               <th class="right">Pris NOK</th>
@@ -77,6 +93,9 @@
           <tbody></tbody>
         </table>
       </div>
+      <div class="small notice" id="addressNotice" style="display:none;">
+        Noen annonser skjuler eksakt adresse. Vi viser by/postnr/område når gate ikke er oppgitt i annonsens metadata.
+      </div>
     </div>
   </div>
 
@@ -85,49 +104,58 @@
       <h2>Snitt per antall soverom</h2>
       <div id="bedsTableWrap"></div>
       <canvas id="bedsChart"></canvas>
+      <div class="small">Basert på siste snapshot.</div>
     </div>
   </div>
 
   <div class="row" style="margin-top:20px;">
     <div class="card">
-      <h2>Snittpris per marked</h2>
-      <canvas id="marketChart"></canvas>
+      <h2>Tidsserie – prisutvikling</h2>
+      <canvas id="timeseriesChart"></canvas>
+      <div class="small" id="timeseriesNote">Viser gjennomsnittlig pris per snapshot for valgt marked. Hvis historikkfil mangler, vises kun siste punkt.</div>
     </div>
   </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
+/* ---------- Konfig / paths ---------- */
 const base = (location.origin + location.pathname).replace(/\/$/, '');
 const SUMMARY_PATH = base + '/data/summaries/markets_summary.csv';
 const BEDS_PATH    = base + '/data/summaries/markets_by_bedrooms.csv';
+function historyPath(marketKey){ return base + '/data/history/' + marketKey + '.csv'; }
 
+/* ---------- State ---------- */
 let allSummary = [];
 let currentMarket = null;
 let currentSnapshotFile = null;
 let currentRows = [];
+let marketChart, bedsChart, timeseriesChart;
 
-let marketChart, bedsChart;
-
-function numberFormat(v) {
-  if (!v || isNaN(+v)) return '';
-  return (+v).toLocaleString('no-NO', { maximumFractionDigits: 0 });
+/* ---------- Utils ---------- */
+function numberFormat(v, decimals = 0) {
+  if (v === undefined || v === null || v === '' || isNaN(+v)) return '';
+  return (+v).toLocaleString('no-NO', { maximumFractionDigits: decimals, minimumFractionDigits: decimals });
 }
-
+async function fetchText(url){
+  const res = await fetch(url + (url.includes('?') ? '&' : '?') + 'cache=' + Date.now());
+  if (!res.ok) throw new Error('HTTP ' + res.status + ' @ ' + url);
+  return res.text();
+}
 async function fetchCSV(url) {
-  const res = await fetch(url + '?cache=' + Date.now());
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  const text = await res.text();
+  const text = await fetchText(url);
   const lines = text.trim().split(/\r?\n/);
-  const headers = lines.shift().split(',').map(h => h.trim());
+  const headers = (lines.shift() || '').split(',').map(h => h.trim());
   const data = lines.map(line => {
+    // enkel CSV uten siterte komma – datasettene våre er "rene"
     const cells = line.split(',').map(s => s.trim());
     const row = {};
-    headers.forEach((h,i)=> row[h] = cells[i] ?? '');
+    headers.forEach((h,i)=> row[h] = (cells[i] ?? ''));
     return row;
   });
   return { headers, data };
 }
 
+/* ---------- Tabeller ---------- */
 function renderSummaryTable(rows) {
   const tb = document.querySelector('#summaryTable tbody');
   tb.innerHTML = '';
@@ -138,24 +166,34 @@ function renderSummaryTable(rows) {
       <td>${r.snapshot_date}</td>
       <td class="right">${numberFormat(r.listings)}</td>
       <td class="right">${numberFormat(r.avg_price)}</td>
+      <td class="right">${numberFormat(r.median_price)}</td>
+      <td class="right">${numberFormat(r.p25_price)}</td>
+      <td class="right">${numberFormat(r.p75_price)}</td>
       <td class="right">${numberFormat(r.avg_sqm)}</td>
       <td class="right">${numberFormat(r.avg_price_per_sqm)}</td>
     `;
     tb.appendChild(tr);
   });
   document.getElementById('marketCount').textContent = `Antall markeder: ${rows.length}`;
+  document.getElementById('summaryNote').textContent =
+    'Snitt, median og kvartiler beregnet på siste snapshot per marked.';
 }
 
 function renderDetailTable(rows) {
   const tb = document.querySelector('#detailTable tbody');
   tb.innerHTML = '';
+  let missingAddresses = 0;
   rows.forEach(r => {
     const tr = document.createElement('tr');
+    const title = r.title || 'Bildegalleri';
+    const addr  = r.address || '';
+    const city  = r.city || r.area || '';
+    if (!addr && !city) missingAddresses++;
     tr.innerHTML = `
-      <td><a href="${r.url}" target="_blank">${r.title || 'Bildegalleri'}</a></td>
-      <td>${r.address || ''}</td>
-      <td>${r.postal_code || ''}</td>
-      <td>${r.city || ''}</td>
+      <td><a href="${r.url}" target="_blank" rel="noopener">${escapeHtml(title)}</a></td>
+      <td>${escapeHtml(addr)}</td>
+      <td>${escapeHtml(r.postal_code || '')}</td>
+      <td>${escapeHtml(city)}</td>
       <td class="right">${numberFormat(r.sqm)}</td>
       <td class="right">${numberFormat(r.bedrooms)}</td>
       <td class="right">${numberFormat(r.price_nok)}</td>
@@ -163,58 +201,89 @@ function renderDetailTable(rows) {
     `;
     tb.appendChild(tr);
   });
+  document.getElementById('addressNotice').style.display = missingAddresses ? 'block' : 'none';
 }
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
-// ----------- Grafer ---------------
+/* ---------- Grafer ---------- */
 function drawMarketChart(rows) {
   const ctx = document.getElementById('marketChart').getContext('2d');
   if (marketChart) marketChart.destroy();
+  const labels = rows.map(r=>r.market_key);
+  const avg    = rows.map(r=>+r.avg_price||0);
+  const med    = rows.map(r=>+r.median_price||0);
   marketChart = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: rows.map(r=>r.market_key),
-      datasets: [{
-        label: 'Snittpris per marked (NOK)',
-        data: rows.map(r=>+r.avg_price||0),
-        backgroundColor: '#0a58ca'
-      }]
+      labels,
+      datasets: [
+        { label: 'Snitt pris (NOK)',  data: avg, backgroundColor: '#0a58ca' },
+        { label: 'Median pris (NOK)', data: med, backgroundColor: '#7aa6ff' }
+      ]
     },
-    options: { responsive:true, plugins:{ legend:{display:false} } }
+    options: { responsive:true, plugins:{ legend:{ position:'bottom' } } }
   });
 }
 
 function drawBedsChart(rows) {
   const ctx = document.getElementById('bedsChart').getContext('2d');
   if (bedsChart) bedsChart.destroy();
+  rows.sort((a,b)=> (+a.bedrooms||0) - (+b.bedrooms||0));
   bedsChart = new Chart(ctx, {
     type: 'bar',
     data: {
       labels: rows.map(r=>`${r.bedrooms} soverom`),
-      datasets: [{
-        label: 'Snittpris (NOK)',
-        data: rows.map(r=>+r.avg_price||0),
-        backgroundColor: '#198754'
-      }]
+      datasets: [
+        { label: 'Snitt pris (NOK)', data: rows.map(r=>+r.avg_price||0), backgroundColor: '#198754' }
+      ]
     },
-    options: { responsive:true, plugins:{ legend:{display:false} } }
+    options: { responsive:true, plugins:{ legend:{ display:false } } }
   });
 }
 
-// ----------- Per soverom-tabell ---------------
+function drawTimeseriesChart(points) {
+  const ctx = document.getElementById('timeseriesChart').getContext('2d');
+  if (timeseriesChart) timeseriesChart.destroy();
+  timeseriesChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: points.map(p=>p.date),
+      datasets: [
+        { label: 'Snitt pris (NOK)', data: points.map(p=>p.avg), borderColor: '#0a58ca', backgroundColor: 'rgba(10,88,202,.15)', fill: true, tension: .2 },
+        { label: 'Median pris (NOK)', data: points.map(p=>p.median), borderColor: '#198754', backgroundColor: 'rgba(25,135,84,.15)', fill: true, tension: .2 }
+      ]
+    },
+    options: { responsive:true, plugins:{ legend:{ position:'bottom' } }, scales:{ y:{ beginAtZero:false } } }
+  });
+}
+
+/* ---------- Lastere ---------- */
+async function loadBedsSummary(marketKey) {
+  try {
+    const { data } = await fetchCSV(BEDS_PATH);
+    const rows = data.filter(r => r.market_key === marketKey);
+    renderBedsTable(rows);
+    drawBedsChart(rows);
+  } catch (e) {
+    console.warn('Ingen beds-summary:', e);
+    document.getElementById('bedsTableWrap').innerHTML = '<div class="small">Ingen data tilgjengelig.</div>';
+    if (bedsChart) bedsChart.destroy();
+  }
+}
 function renderBedsTable(rows) {
   const wrap = document.getElementById('bedsTableWrap');
   wrap.innerHTML = '';
   const tbl = document.createElement('table');
-  tbl.innerHTML = `
-    <thead><tr>
+  const thead = document.createElement('thead');
+  thead.innerHTML = `
+    <tr>
       <th class="right">Soverom</th>
       <th class="right">Antall</th>
       <th class="right">Snitt pris</th>
       <th class="right">Snitt kvm</th>
       <th class="right">Snitt pris/kvm</th>
-    </tr></thead>
-    <tbody></tbody>`;
-  const tb = tbl.querySelector('tbody');
+    </tr>`;
+  const tbody = document.createElement('tbody');
   rows.forEach(r=>{
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -224,18 +293,10 @@ function renderBedsTable(rows) {
       <td class="right">${numberFormat(r.avg_sqm)}</td>
       <td class="right">${numberFormat(r.avg_price_per_sqm)}</td>
     `;
-    tb.appendChild(tr);
+    tbody.appendChild(tr);
   });
+  tbl.appendChild(thead); tbl.appendChild(tbody);
   wrap.appendChild(tbl);
-}
-
-// ----------- Loaders ---------------
-async function loadBedsSummary(marketKey) {
-  const { data } = await fetchCSV(BEDS_PATH);
-  const rows = data.filter(r => r.market_key === marketKey);
-  rows.sort((a,b)=> (+a.bedrooms||0) - (+b.bedrooms||0));
-  renderBedsTable(rows);
-  drawBedsChart(rows);
 }
 
 async function loadMarketDetail() {
@@ -251,10 +312,49 @@ async function loadMarketDetail() {
   document.getElementById('detailSub').textContent = `Viser ${rows.length} annonser for ${currentMarket}.`;
 }
 
+async function loadTimeseries(marketKey) {
+  // Primærkilde: data/history/{market}.csv (hvis pipeline skriver denne)
+  const url = historyPath(marketKey);
+  let points = [];
+  try {
+    const { data } = await fetchCSV(url);
+    // grupper per snapshot_date
+    const byDate = {};
+    data.forEach(r => {
+      const d = r.snapshot_date || r.date || '';
+      if (!d) return;
+      const price = +r.price_nok || 0;
+      if (!byDate[d]) byDate[d] = [];
+      if (price) byDate[d].push(price);
+    });
+    Object.entries(byDate).sort((a,b)=> a[0].localeCompare(b[0])).forEach(([date, arr])=>{
+      const avg = arr.reduce((s,x)=>s+x,0)/arr.length;
+      const med = median(arr);
+      points.push({ date, avg: Math.round(avg), median: Math.round(med) });
+    });
+  } catch (e) {
+    console.warn('Ingen history-fil for', marketKey, e);
+    // Fallback: bruk bare siste punkt fra markets_summary.csv
+    const row = allSummary.find(x=>x.market_key===marketKey);
+    if (row) points = [{ date: row.snapshot_date, avg: +row.avg_price||0, median: +row.median_price||0 }];
+    document.getElementById('timeseriesNote').innerText =
+      'Historikkfil mangler – viser siste snapshot. For tidsserie, vær sikker på at data/history/' + marketKey + '.csv publiseres.';
+  }
+  drawTimeseriesChart(points);
+}
+function median(arr) {
+  if (!arr.length) return 0;
+  const a = [...arr].sort((x,y)=>x-y);
+  const mid = Math.floor(a.length/2);
+  return a.length%2 ? a[mid] : (a[mid-1]+a[mid])/2;
+}
+
+/* ---------- Init ---------- */
 async function init() {
   try {
     const { data } = await fetchCSV(SUMMARY_PATH);
     allSummary = data;
+    // oversikt & graf over markeder
     renderSummaryTable(allSummary);
     drawMarketChart(allSummary);
 
@@ -267,22 +367,25 @@ async function init() {
       opt.textContent = r.market_key;
       sel.appendChild(opt);
     });
-
-    currentMarket = data[0]?.market_key;
-    currentSnapshotFile = data[0]?.snapshot_file;
-    sel.value = currentMarket;
+    currentMarket = data[0]?.market_key || null;
+    currentSnapshotFile = data[0]?.snapshot_file || null;
+    sel.value = currentMarket || '';
     document.getElementById('snapshotBadge').textContent = currentSnapshotFile || '';
 
-    await loadMarketDetail();
-    await loadBedsSummary(currentMarket);
+    if (currentMarket) {
+      await loadMarketDetail();
+      await loadBedsSummary(currentMarket);
+      await loadTimeseries(currentMarket);
+    }
 
     sel.addEventListener('change', async (e)=>{
       currentMarket = e.target.value;
       const row = allSummary.find(x=>x.market_key===currentMarket);
-      currentSnapshotFile = row?.snapshot_file;
+      currentSnapshotFile = row?.snapshot_file || null;
       document.getElementById('snapshotBadge').textContent = currentSnapshotFile || '';
       await loadMarketDetail();
       await loadBedsSummary(currentMarket);
+      await loadTimeseries(currentMarket);
       document.getElementById('searchInput').value = '';
     });
 
@@ -292,12 +395,14 @@ async function init() {
       const filtered = currentRows.filter(r =>
         (r.title||'').toLowerCase().includes(q) ||
         (r.address||'').toLowerCase().includes(q) ||
-        (r.postal_code||'').toLowerCase().includes(q)
+        (r.postal_code||'').toLowerCase().includes(q) ||
+        (r.city||'').toLowerCase().includes(q)
       );
       renderDetailTable(filtered);
     });
+
   } catch(e) {
-    console.error(e);
+    console.error('Klarte ikke å laste summary-data:', e);
     document.getElementById('marketCount').textContent = 'Klarte ikke å laste data.';
   }
 }
