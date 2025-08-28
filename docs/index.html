@@ -154,10 +154,11 @@ async function fetchCSV(url) {
   });
   return { headers, data };
 }
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
 /* ---------- Tabeller ---------- */
 function renderSummaryTable(rows) {
-  const tb = document.querySelector('#summaryTable tbody');
+  const tb = document.getElementById('summaryTable').querySelector('tbody');
   tb.innerHTML = '';
   rows.forEach(r => {
     const tr = document.createElement('tr');
@@ -180,7 +181,7 @@ function renderSummaryTable(rows) {
 }
 
 function renderDetailTable(rows) {
-  const tb = document.querySelector('#detailTable tbody');
+  const tb = document.getElementById('detailTable').querySelector('tbody');
   tb.innerHTML = '';
   let missingAddresses = 0;
   rows.forEach(r => {
@@ -203,7 +204,6 @@ function renderDetailTable(rows) {
   });
   document.getElementById('addressNotice').style.display = missingAddresses ? 'block' : 'none';
 }
-function escapeHtml(s){ return (s||'').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
 
 /* ---------- Grafer ---------- */
 function drawMarketChart(rows) {
@@ -301,7 +301,7 @@ function renderBedsTable(rows) {
 
 async function loadMarketDetail() {
   if (!currentSnapshotFile) {
-    document.querySelector('#detailTable tbody').innerHTML = '';
+    document.getElementById('detailTable').querySelector('tbody').innerHTML = '';
     return;
   }
   const path = base + '/data/snapshots/' + currentSnapshotFile;
@@ -313,12 +313,10 @@ async function loadMarketDetail() {
 }
 
 async function loadTimeseries(marketKey) {
-  // Primærkilde: data/history/{market}.csv (hvis pipeline skriver denne)
   const url = historyPath(marketKey);
   let points = [];
   try {
     const { data } = await fetchCSV(url);
-    // grupper per snapshot_date
     const byDate = {};
     data.forEach(r => {
       const d = r.snapshot_date || r.date || '';
@@ -334,11 +332,10 @@ async function loadTimeseries(marketKey) {
     });
   } catch (e) {
     console.warn('Ingen history-fil for', marketKey, e);
-    // Fallback: bruk bare siste punkt fra markets_summary.csv
     const row = allSummary.find(x=>x.market_key===marketKey);
     if (row) points = [{ date: row.snapshot_date, avg: +row.avg_price||0, median: +row.median_price||0 }];
     document.getElementById('timeseriesNote').innerText =
-      'Historikkfil mangler – viser siste snapshot. For tidsserie, vær sikker på at data/history/' + marketKey + '.csv publiseres.';
+      'Historikkfil mangler – viser siste snapshot. For tidsserie, sørg for at data/history/' + marketKey + '.csv publiseres.';
   }
   drawTimeseriesChart(points);
 }
@@ -354,6 +351,7 @@ async function init() {
   try {
     const { data } = await fetchCSV(SUMMARY_PATH);
     allSummary = data;
+
     // oversikt & graf over markeder
     renderSummaryTable(allSummary);
     drawMarketChart(allSummary);
