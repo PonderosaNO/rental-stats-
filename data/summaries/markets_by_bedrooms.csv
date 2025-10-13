@@ -1,10 +1,2 @@
-market_key,snapshot_date,bedrooms,listings,avg_price
-narvik_no,2025-08-28,2,1,24000
-narvik_no,2025-08-28,4,1,6000
-narvik_no,2025-08-28,5,1,6000
-narvik_no,2025-08-28,1,1,12000
-tromso_no,2025-08-28,2,4,29375
-tromso_no,2025-08-28,1,2,15200
-tromso_no,2025-08-28,3,3,18000
-tromso_no,2025-08-28,5,1,15000
-tromso_no,2025-08-28,4,1,15000
+market_key,snapshot_date,bedrooms,listings,avg_price,avg_sqm,avg_price_per_sqm
+narvik_no,2025-10-13,5,1,6200,136,46
