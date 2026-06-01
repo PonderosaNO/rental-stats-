@@ -1,3 +1,3 @@
 market_key,snapshot_file,snapshot_date,listings,avg_price,median_price,p25_price,p75_price,avg_sqm,avg_price_per_sqm
-narvik_no,narvik_no_2026-05-25.csv,2026-05-25,0,,,,,,
-tromso_no,tromso_no_2026-05-25.csv,2026-05-25,3,25667,29000,,,74,1191
+narvik_no,narvik_no_2026-06-01.csv,2026-06-01,0,,,,,,
+tromso_no,tromso_no_2026-06-01.csv,2026-06-01,2,35500,35500.0,,,105,1555
